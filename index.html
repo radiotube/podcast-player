@@ -219,7 +219,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
   </div>
   <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div></div>
   <div class="scrub">
-    <input type="range" id="seek" min="0" max="100" step="1" value="0" aria-label="Position">
+    <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Position">
     <div class="times"><span id="tCur">0:00</span><span id="tLeft">-0:00</span></div>
   </div>
   <div class="transport">
@@ -829,7 +829,7 @@ function playEp(e, autoplay){
   savePos(true);
   cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||"", f:showObj.feedUrl||""};
   S.now = cur; save();
-  ads = []; endSkipped = false; resetTranscript();
+  ads = []; endSkipped = false; badLen = false; $("seek").disabled = false; resetTranscript();
   var other = e.v ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
   media = e.v ? video : audio;
   video.hidden = !e.v; $("bigArt").hidden = !!e.v; $("pipBtn").hidden = !e.v || !pipSupported(); $("fsBtn").hidden = !e.v;
@@ -872,14 +872,18 @@ function closePlayer(){ $("player").classList.remove("open"); $("player").setAtt
 $("playerClose").onclick = closePlayer; $("miniOpen").onclick = openPlayer;
 function toggle(){ if(!cur) return; if(media.paused){ var p=media.play(); if(p&&p.catch) p.catch(function(){}); } else media.pause(); }
 $("bigPlay").onclick = toggle; $("miniPlay").onclick = toggle;
-/* iPhone Safari sometimes reports a length far shorter than the episode (often for MP3s that
-   stream through tracking redirects). Fall back to the feed's length when it is clearly off. */
+/* Episode length: the player's own figure, or the feed's when the player has none or reports one
+   that is clearly short. If playback runs past the reported length and the feed gives none, the
+   length is unknown and this returns 0, so skips and the scrubber don't clamp to a wrong figure. */
+var badLen = false;
 function dur(){
   var md = media.duration, fl = (cur && cur.len) || 0, t = media.currentTime || 0;
   var ok = md && isFinite(md) && md > 0;
+  if(ok && t > md + 1) badLen = true;
+  if(badLen) ok = false;
   var d = ok ? md : fl;
   if(ok && fl && md < fl*0.9) d = fl;
-  if(d && t > d) d = t;
+  if(d && t > d) d = 0;
   return d || 0;
 }
 function skip(d){ if(!cur) return; try{ media.currentTime = Math.max(0, Math.min((dur()||1e9)-1, media.currentTime + d)); }catch(e){} }
@@ -919,8 +923,9 @@ function onTime(){
   }
   var outro = (showOf(cur && cur.s).skipEnd)||0;
   if(outro && d && !endSkipped && !media.paused && t >= d - outro && d > outro + 30){ endSkipped = true; toast("Skipped the last "+fmtSecs(outro)); finishEpisode(); media.pause(); return; }
+  $("seek").disabled = !d;
   if(!seeking){ $("seek").value = d? Math.round(t/d*1000) : 0; $("tCur").textContent = fmt(t); }
-  $("tLeft").textContent = "-"+fmt(Math.max(0,(d-t))/(S.speed||1));
+  $("tLeft").textContent = d ? "-"+fmt(Math.max(0,(d-t))/(S.speed||1)) : "";
   syncTranscript(t);
   if(Date.now()-lastSaved > 5000) savePos();
 }
