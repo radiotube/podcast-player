@@ -973,7 +973,11 @@ function findTranscripts(c){
   var sh = showOf(c.s); if(!sh.feedUrl) return Promise.resolve([]);
   return fetch(sh.feedUrl).then(function(r){ if(!r.ok) throw 0; return r.text(); }).then(function(txt){
     var items = rssItems(new DOMParser().parseFromString(txt, "application/xml"), c.s);
-    var hit = items.filter(function(i){ return i.g===c.g || normUrl(i.u)===normUrl(c.u); })[0];
+    var file = function(u){ return String(u||"").split("?")[0].split("/").pop().toLowerCase(); };
+    var nt = function(t){ return String(t||"").toLowerCase().replace(/\s+/g," ").trim(); };
+    var hit = items.filter(function(i){ return i.g===c.g || normUrl(i.u)===normUrl(c.u); })[0]
+      || items.filter(function(i){ return file(i.u) && file(i.u)===file(c.u); })[0]
+      || items.filter(function(i){ return nt(i.t)===nt(c.t); })[0];
     if(hit && hit.ch && !c.ch){ c.ch = hit.ch; loadChapters(c); }
     return hit ? hit.tr : [];
   }).catch(function(){ return null; });
