@@ -1000,10 +1000,20 @@ function loadTranscript(c){
   });
 }
 function tsec(s){ var p = String(s).trim().replace(",",".").split(":").map(parseFloat); return p.reduce(function(a,b){return a*60+b;},0); }
+/* Some shows send one cue per word. Join cues from the same speaker into sentence-sized lines. */
+function mergeCues(list){
+  var merged = [];
+  list.forEach(function(c){
+    var last = merged[merged.length-1];
+    var open = last && last.w===c.w && (last.b.length < 120 || (!/[.?!]["')\]]?$/.test(last.b) && last.b.length < 280));
+    if(open){ last.b += " "+c.b; last.e = c.e; } else merged.push({s:c.s, e:c.e, w:c.w, b:c.b});
+  });
+  return merged;
+}
 function parseTranscript(txt, info){
   var t = txt.trim();
   if(/json/i.test(info.type||"") || t.charAt(0)==="{"){
-    try{ var j = JSON.parse(t); return (j.segments||[]).map(function(s){ return {s:+s.startTime||0, e:+s.endTime||0, w:s.speaker||"", b:String(s.body||"").trim()}; }).filter(function(c){return c.b;}); }catch(e){}
+    try{ var j = JSON.parse(t); return mergeCues((j.segments||[]).map(function(s){ return {s:+s.startTime||0, e:+s.endTime||0, w:s.speaker||"", b:String(s.body||"").trim()}; }).filter(function(c){return c.b;})); }catch(e){}
   }
   if(/-->/.test(t)){
     var out = [];
@@ -1016,9 +1026,7 @@ function parseTranscript(txt, info){
       var sp = body.match(/^([A-Z][\w .'-]{1,30}):\s+(.*)$/); if(!who && sp){ who = sp[1]; body = sp[2]; }
       out.push({s:tsec(m[0]), e:tsec(m[1].trim().split(/\s/)[0]), w:who, b:body});
     });
-    var merged = [];
-    out.forEach(function(c){ var last = merged[merged.length-1]; if(last && last.w===c.w && (last.b.length < 160)){ last.b += " "+c.b; last.e = c.e; } else merged.push(c); });
-    return merged;
+    return mergeCues(out);
   }
   var text = /<[a-z][\s\S]*>/i.test(t) ? plain(t) : t;
   return text.split(/\n\s*\n|\n/).map(function(p){return p.trim();}).filter(Boolean).map(function(p){ return {s:-1, e:-1, w:"", b:p}; });
