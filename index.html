@@ -138,7 +138,8 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .player .grab{display:flex;justify-content:space-between;align-items:center}
 .player .stage{flex:1 1 auto;display:flex;align-items:center;justify-content:center;min-height:0;padding:12px 0}
 .player .stage img{width:min(78vw,340px,42vh);aspect-ratio:1;border-radius:18px;object-fit:cover;box-shadow:0 18px 50px rgba(0,0,0,.45);max-width:100%}
-.player video{width:100%;max-height:100%;border-radius:12px;background:#000;max-width:100%}
+.player video{display:block;width:100%;max-width:100%;aspect-ratio:16/9;height:auto;max-height:100%;min-height:140px;flex:0 1 auto;object-fit:contain;border-radius:12px;background:#000}
+.player video[hidden]{display:none}
 .player .info{text-align:center;display:flex;flex-direction:column;gap:2px;margin:0 auto;max-width:560px;width:100%}
 .player .info .t{font:700 19px/1.25 var(--display);text-wrap:balance}
 .player .info .s{color:var(--muted);font-size:15px}
@@ -309,7 +310,7 @@ function plain(html){
 function toast(msg){ var t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(function(){t.hidden=true;},2600); }
 function normUrl(u){ return String(u||"").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/^www\./,"").replace(/\/+$/,""); }
 function bigArt(u){ return u ? String(u).replace(/\/\d+x\d+bb\./, "/600x600bb.") : ""; }
-function isVideo(type, url){ if(type && /video/i.test(type)) return true; return /\.(mp4|m4v|mov|webm)(\?|$)/i.test(url||""); }
+function isVideo(type, url){ if(type && /video|mpegurl/i.test(type)) return true; return /\.(mp4|m4v|mov|webm|m3u8)(\?|#|$)/i.test(url||""); }
 function subjects(){
   var set = {}; Object.keys(S.subs).forEach(function(id){ var c = S.subs[id].cat; if(c) set[c] = 1; });
   return Object.keys(set).sort(function(a,b){return a.localeCompare(b);});
@@ -379,7 +380,7 @@ function fetchPIEps(show){
     return items.filter(function(i){return i.enclosureUrl;}).map(function(i){
       var tr = (i.transcripts && i.transcripts.length) ? i.transcripts.map(function(t){return {url:t.url, type:t.type||""};}) : (i.transcriptUrl? [{url:i.transcriptUrl, type:""}] : []);
       return {g:String(i.guid||i.enclosureUrl), s:show.id, t:i.title||"Episode", d:i.datePublished? new Date(i.datePublished*1000).toISOString() : "",
-        u:i.enclosureUrl, v:isVideo(i.enclosureType, i.enclosureUrl), len:i.duration||0, x:plain(i.description||"").slice(0,1500),
+        u:i.enclosureUrl, v:isVideo(i.enclosureType, i.enclosureUrl), ty:i.enclosureType||"", len:i.duration||0, x:plain(i.description||"").slice(0,1500),
         a:i.image||i.feedImage||"", ch:i.chaptersUrl||"", tr:tr};
     });
   });
@@ -391,7 +392,7 @@ function fetchAppleEps(show){
     if(head){ if(!show.feedUrl && head.feedUrl) show.feedUrl = head.feedUrl; if(head.artworkUrl600 && !show.art) show.art = bigArt(head.artworkUrl600); }
     var eps = rs.filter(function(r){return r.wrapperType==="podcastEpisode" && r.episodeUrl;}).map(function(r){
       return {g:String(r.episodeGuid||r.episodeUrl), s:show.id, t:r.trackName||"Episode", d:r.releaseDate, u:r.episodeUrl,
-        v:isVideo(r.episodeContentType, r.episodeUrl), len:r.trackTimeMillis? r.trackTimeMillis/1000 : 0,
+        v:isVideo(r.episodeContentType, r.episodeUrl), ty:r.episodeContentType||"", len:r.trackTimeMillis? r.trackTimeMillis/1000 : 0,
         x:plain(r.description||r.shortDescription||"").slice(0,1500), a:bigArt(r.artworkUrl600||r.artworkUrl160||""), ch:"", tr:null};
     });
     eps.sort(function(a,b){return new Date(b.d)-new Date(a.d);});
@@ -418,7 +419,7 @@ function rssItems(x, sid){
     var tr = Array.prototype.map.call(item.getElementsByTagNameNS("*","transcript"), function(t){ return {url:t.getAttribute("url"), type:t.getAttribute("type")||""}; }).filter(function(t){return t.url;});
     var chEl = item.getElementsByTagNameNS("*","chapters")[0];
     return {g:String((g&&g.textContent)||u), s:sid, t:title?title.textContent:"Episode", d:date?new Date(date.textContent).toISOString():"",
-      u:u, v:isVideo(enc.getAttribute("type"), u), len:dur, x:plain(desc?desc.textContent:"").slice(0,1500), a:"", ch: chEl? chEl.getAttribute("url")||"" : "", tr:tr};
+      u:u, v:isVideo(enc.getAttribute("type"), u), ty:enc.getAttribute("type")||"", len:dur, x:plain(desc?desc.textContent:"").slice(0,1500), a:"", ch: chEl? chEl.getAttribute("url")||"" : "", tr:tr};
   }).filter(Boolean);
 }
 
@@ -830,9 +831,11 @@ function playEp(e, autoplay){
   cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||"", f:showObj.feedUrl||""};
   S.now = cur; save();
   ads = []; endSkipped = false; badLen = false; $("seek").disabled = false; resetTranscript();
-  var other = e.v ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
-  media = e.v ? video : audio;
-  video.hidden = !e.v; $("bigArt").hidden = !!e.v; $("pipBtn").hidden = !e.v || !pipSupported(); $("fsBtn").hidden = !e.v;
+  var useVideo = e.v || isVideo(e.ty, e.u);
+  var other = useVideo ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
+  media = useVideo ? video : audio;
+  if(useVideo) video.poster = cur.a || "";
+  showVideo(useVideo);
   media.src = e.u; media.playbackRate = S.speed||1; media.defaultPlaybackRate = S.speed||1;
   var start = S.pos[e.g]||0, intro = showObj.skipStart||0;
   media.addEventListener("loadedmetadata", function once(){
@@ -867,6 +870,17 @@ function fillNowPlaying(){
   $("bigArt").src = cur.a||""; $("pTitle").textContent = cur.t; $("pShow").textContent = cur.show||"";
   $("speedSel").value = String(S.speed||1); setPlayIcons();
 }
+/* Show the picture, or the artwork when the episode has none. A saved episode from before the
+   type was kept switches to the picture once the file turns out to have one. */
+function showVideo(on){
+  video.hidden = !on; $("bigArt").hidden = !!on; $("pipBtn").hidden = !on || !pipSupported(); $("fsBtn").hidden = !on;
+}
+video.addEventListener("loadedmetadata", function(){
+  if(media!==video || !cur) return;
+  var has = video.videoWidth > 0;
+  if(has && !cur.v){ cur.v = true; S.now = cur; save(); }
+  showVideo(has);
+});
 function openPlayer(){ $("player").classList.add("open"); $("player").setAttribute("aria-hidden","false"); }
 function closePlayer(){ $("player").classList.remove("open"); $("player").setAttribute("aria-hidden","true"); }
 $("playerClose").onclick = closePlayer; $("miniOpen").onclick = openPlayer;
