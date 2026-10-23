@@ -827,7 +827,7 @@ function playEp(e, autoplay){
   var showObj = showOf(e.s);
   if(cur && cur.g===e.g){ if(autoplay){ media.play().catch(function(){}); } openPlayer(); return; }
   savePos(true);
-  cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||""};
+  cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||"", f:showObj.feedUrl||""};
   S.now = cur; save();
   ads = []; endSkipped = false; resetTranscript();
   var other = e.v ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
@@ -970,8 +970,9 @@ function txMsg(text, link){
 }
 function findTranscripts(c){
   if(c.tr && c.tr.length) return Promise.resolve(c.tr);
-  var sh = showOf(c.s); if(!sh.feedUrl) return Promise.resolve([]);
-  return fetch(sh.feedUrl).then(function(r){ if(!r.ok) throw 0; return r.text(); }).then(function(txt){
+  var feed = showOf(c.s).feedUrl || c.f, m = /^it:(\d+)$/.exec(c.s);
+  var getFeed = feed ? Promise.resolve(feed) : m ? jsonp("https://itunes.apple.com/lookup?id="+m[1]).then(function(d){ return ((d.results||[])[0]||{}).feedUrl||""; }) : Promise.resolve("");
+  return getFeed.then(function(u){ if(!u) throw 0; c.f = u; return fetch(u); }).then(function(r){ if(!r.ok) throw 0; return r.text(); }).then(function(txt){
     var items = rssItems(new DOMParser().parseFromString(txt, "application/xml"), c.s);
     var file = function(u){ return String(u||"").split("?")[0].split("/").pop().toLowerCase(); };
     var nt = function(t){ return String(t||"").toLowerCase().replace(/\s+/g," ").trim(); };
