@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Podcast Player</title>
+<meta name="description" content="Kevin's podcast player for iPhone and iPad, with video podcasts and a favorites order you set.">
+<meta name="theme-color" content="#11181b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Podcasts">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<style>
+/* Layout: one-screen app. Scrolling content between a top bar and a fixed bottom stack (mini player + tab bar). */
+:root{
+  --bg:#11181b; --surface:#1a2327; --surface-2:#243035; --line:#2e3b41;
+  --fg:#e9eef0; --muted:#97a6ac; --accent:#f2a93b; --accent-ink:#1d1405;
+  --video:#7cc4e8; --good:#7fcf9a; --danger:#ef7d6d;
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --display:-apple-system-headline,-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --tabh:58px; --minih:68px;
+  --sal:env(safe-area-inset-left,0px); --sar:env(safe-area-inset-right,0px);
+  --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.4 var(--ui);overscroll-behavior:none;-webkit-text-size-adjust:100%}
+[hidden]{display:none!important}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+img{max-width:100%;display:block}
+
+.app{display:flex;flex-direction:column;height:100%}
+.topbar{flex:0 0 auto;padding-top:calc(var(--sat) + 10px);padding-bottom:10px;padding-left:max(16px,var(--sal));padding-right:max(16px,var(--sar));display:flex;align-items:center;gap:10px;background:var(--bg);border-bottom:1px solid transparent}
+.topbar.scrolled{border-bottom-color:var(--line)}
+.topbar h1{font:700 30px/1.1 var(--display);letter-spacing:-.01em;margin:0;flex:1;min-width:0;text-wrap:balance}
+.topbar .back{display:flex;align-items:center;gap:4px;background:none;border:0;color:var(--accent);font-size:17px;padding:8px 4px;margin-left:-4px}
+.topbar .sub-title{font:600 17px/1.2 var(--ui);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.pill-btn{background:var(--surface-2);border:0;border-radius:999px;padding:8px 14px;font-size:15px;font-weight:600;color:var(--fg);min-height:40px}
+.pill-btn.on{background:var(--accent);color:var(--accent-ink)}
+
+.scroller{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-left:max(16px,var(--sal));padding-right:max(16px,var(--sar));padding-block:4px calc(var(--tabh) + var(--minih) + var(--sab) + 24px)}
+.view{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+.section-label{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.note{color:var(--muted);font-size:14px;margin:0}
+.empty{color:var(--muted);text-align:center;padding:28px 12px;border:1px dashed var(--line);border-radius:14px}
+
+/* Favorites */
+.fav-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.fav{background:var(--surface);border-radius:16px;padding:12px;display:grid;grid-template-columns:auto 64px minmax(0,1fr) auto;gap:12px;align-items:center;position:relative}
+.fav .rank{font:600 14px var(--mono);color:var(--accent);width:22px;text-align:center;font-variant-numeric:tabular-nums}
+.fav img,.show-row img{width:64px;height:64px;border-radius:10px;object-fit:cover;background:var(--surface-2)}
+.fav .meta{min-width:0}
+.fav .show-name{font-weight:650;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:none;border:0;padding:0;text-align:left;width:100%}
+.fav .latest{font-size:14px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.fav .latest b{color:var(--fg);font-weight:500}
+.play-btn{width:48px;height:48px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;flex:0 0 auto}
+.play-btn svg{width:20px;height:20px}
+.play-btn.ghost{background:var(--surface-2);color:var(--fg)}
+.arrange-tools{display:none;align-items:center;gap:6px}
+.arranging .fav{grid-template-columns:auto 52px minmax(0,1fr) auto}
+.arranging .fav img{width:52px;height:52px}
+.arranging .fav .play-btn{display:none}
+.arranging .arrange-tools{display:flex}
+.icon-btn{width:44px;height:44px;border-radius:12px;border:0;background:var(--surface-2);color:var(--fg);display:grid;place-items:center}
+.icon-btn:disabled{opacity:.35}
+.icon-btn svg{width:20px;height:20px}
+.handle{touch-action:none;cursor:grab;background:transparent;color:var(--muted)}
+.fav.dragging{opacity:.9;box-shadow:0 10px 30px rgba(0,0,0,.5);z-index:5;background:var(--surface-2)}
+.fav.placeholder{background:transparent;border:2px dashed var(--line)}
+
+.show-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.show-row{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.show-row:last-child{border-bottom:0}
+.show-row img{width:56px;height:56px}
+.show-row .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.show-row .a{font-size:14px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-link{background:none;border:0;padding:0;text-align:left;min-width:0;display:block;width:100%}
+.star{background:none;border:0;color:var(--muted);width:44px;height:44px;display:grid;place-items:center}
+.star.on{color:var(--accent)}
+.star svg{width:24px;height:24px}
+
+/* Show page */
+.show-head{display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;align-items:end}
+.show-head img{width:120px;height:120px;border-radius:14px;object-fit:cover;background:var(--surface-2)}
+.show-head h2{font:700 22px/1.2 var(--display);margin:0 0 4px;text-wrap:balance}
+.show-head .a{color:var(--muted);font-size:14px;margin:0 0 10px}
+.show-actions{display:flex;flex-wrap:wrap;gap:8px}
+.eps{list-style:none;margin:0;padding:0}
+.ep{padding:14px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;align-items:center}
+.ep .when{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.ep .title{font-weight:600;background:none;border:0;padding:0;text-align:left}
+.ep.played .title{color:var(--muted);font-weight:500}
+.ep .desc{grid-column:1/-1;font-size:14px;color:var(--muted);white-space:pre-line;overflow-wrap:anywhere}
+.badge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px;text-transform:uppercase}
+.badge.video{background:rgba(124,196,232,.16);color:var(--video)}
+.badge.left{background:rgba(242,169,59,.14);color:var(--accent)}
+.badge.done{background:rgba(127,207,154,.14);color:var(--good)}
+.prog{grid-column:1/-1;height:3px;background:var(--surface-2);border-radius:2px;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent)}
+
+/* Search & settings */
+.search-box{display:flex;gap:8px}
+.search-box input{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:17px}
+.card{background:var(--surface);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.card h3{margin:0;font-size:17px}
+.card p{margin:0;color:var(--muted);font-size:15px;max-width:62ch}
+.btn{border:0;border-radius:12px;padding:12px 16px;font-weight:600;background:var(--accent);color:var(--accent-ink);min-height:46px;align-self:flex-start}
+.btn.secondary{background:var(--surface-2);color:var(--fg)}
+.btn-row{display:flex;flex-wrap:wrap;gap:8px}
+.status{font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}
+.status.err{color:var(--danger)}
+ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:flex;flex-direction:column;gap:4px}
+
+/* Bottom stack */
+.bottom{position:fixed;left:0;right:0;bottom:0;z-index:20;background:rgba(17,24,27,.94);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-top:1px solid var(--line)}
+.mini{display:grid;grid-template-columns:48px minmax(0,1fr) auto auto;gap:10px;align-items:center;height:var(--minih);padding-left:max(12px,var(--sal));padding-right:max(12px,var(--sar));border-bottom:1px solid var(--line)}
+.mini img{width:48px;height:48px;border-radius:8px;object-fit:cover;background:var(--surface-2)}
+.mini .open{background:none;border:0;padding:0;text-align:left;min-width:0}
+.mini .t{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .s{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .bar{grid-column:1/-1;height:2px;margin-top:-10px;background:var(--surface-2)}
+.tabs{display:flex;height:calc(var(--tabh) + var(--sab));padding-bottom:var(--sab);padding-left:var(--sal);padding-right:var(--sar)}
+.tabs button{flex:1;background:none;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:600}
+.tabs button svg{width:24px;height:24px}
+.tabs button[aria-current="page"]{color:var(--accent)}
+
+/* Full player */
+.player{position:fixed;inset:0;z-index:40;background:var(--bg);display:flex;flex-direction:column;padding-top:calc(var(--sat) + 8px);padding-bottom:calc(var(--sab) + 16px);padding-left:max(20px,var(--sal));padding-right:max(20px,var(--sar));transform:translateY(100%);transition:transform .28s ease;visibility:hidden}
+.player.open{transform:none;visibility:visible}
+@media (prefers-reduced-motion:reduce){.player{transition:none}}
+.player .grab{display:flex;justify-content:space-between;align-items:center}
+.player .stage{flex:1 1 auto;display:flex;align-items:center;justify-content:center;min-height:0;padding:12px 0}
+.player .stage img{width:min(78vw,340px,42vh);aspect-ratio:1;border-radius:18px;object-fit:cover;box-shadow:0 18px 50px rgba(0,0,0,.45);max-width:100%}
+.player video{width:100%;max-height:100%;border-radius:12px;background:#000;max-width:100%}
+.player .info{text-align:center;display:flex;flex-direction:column;gap:2px;margin:0 auto;max-width:560px;width:100%}
+.player .info .t{font:700 19px/1.25 var(--display);text-wrap:balance}
+.player .info .s{color:var(--muted);font-size:15px}
+.scrub{width:100%;max-width:560px;margin:14px auto 0}
+.scrub input{width:100%;accent-color:var(--accent);height:28px}
+.scrub .times{display:flex;justify-content:space-between;font:13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.transport{display:flex;justify-content:center;align-items:center;gap:28px;margin:8px 0 14px}
+.skip{background:none;border:0;width:60px;height:60px;display:grid;place-items:center;position:relative;color:var(--fg)}
+.skip svg{width:40px;height:40px}
+.skip span{position:absolute;font:700 11px var(--ui);top:50%;left:50%;transform:translate(-50%,-30%)}
+.big-play{width:80px;height:80px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
+.big-play svg{width:34px;height:34px}
+.extras{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;max-width:560px;margin:0 auto}
+.extras label{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.extras select{background:var(--surface-2);border:0;border-radius:10px;padding:8px 10px;font-size:15px;min-height:42px;min-width:92px;text-align:center}
+.extras .pill-btn{align-self:flex-end}
+.sleep-left{color:var(--accent);font-variant-numeric:tabular-nums}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--tabh) + var(--minih) + var(--sab) + 14px);background:var(--surface-2);color:var(--fg);padding:10px 16px;border-radius:12px;z-index:60;font-size:15px;max-width:calc(100% - 32px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.spinner{width:22px;height:22px;border:3px solid var(--surface-2);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (min-width:700px){.show-head{grid-template-columns:160px minmax(0,1fr)}.show-head img{width:160px;height:160px}}
+
+/* Subjects */
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin:0 -4px;padding-inline:4px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;border:1px solid var(--line);background:transparent;border-radius:999px;padding:8px 14px;font-size:15px;font-weight:600;color:var(--muted);min-height:40px}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.fav .subj{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.group-label{font-size:15px;font-weight:650;margin:14px 0 2px;color:var(--fg)}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600;min-width:0}
+.field select,.field input{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:16px;color:var(--fg);min-height:44px;width:100%}
+.source{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+
+/* Transcript */
+.stage{flex-direction:column;gap:12px}
+.player.tx .stage img{width:min(30vw,120px,18vh)}
+.player.tx video{max-height:32vh}
+.tx-box{display:none;flex:1 1 auto;min-height:0;width:100%;max-width:640px;overflow-y:auto;background:var(--surface);border-radius:14px;padding:6px 4px}
+.player.tx .tx-box{display:block}
+.cue{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 12px;border-radius:10px;font-size:17px;line-height:1.45;color:var(--muted)}
+.cue.now{color:var(--fg);background:var(--surface-2)}
+.cue .who{display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.tx-msg{padding:16px;color:var(--muted);font-size:15px}
+.tx-msg a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar" id="topbar"></header>
+  <main class="scroller" id="scroller"><div class="view" id="view"></div></main>
+</div>
+
+<div class="bottom">
+  <div class="mini" id="mini" hidden>
+    <img id="miniArt" alt="">
+    <button class="open" id="miniOpen" aria-label="Open player"><div class="t" id="miniTitle"></div><div class="s" id="miniShow"></div></button>
+    <button class="icon-btn" id="miniBack" aria-label="Back 15 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v5h5"/></svg></button>
+    <button class="play-btn" id="miniPlay" aria-label="Play"></button>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <button data-tab="home" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>Shows</button>
+    <button data-tab="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Search</button>
+    <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--bg)"/><circle cx="15" cy="12" r="2" fill="var(--bg)"/><circle cx="8" cy="18" r="2" fill="var(--bg)"/></svg>Settings</button>
+  </nav>
+</div>
+
+<section class="player" id="player" aria-label="Now playing" aria-hidden="true">
+  <div class="grab">
+    <button class="back" id="playerClose" style="background:none;border:0;color:var(--accent);font-size:17px;padding:8px 0">Done</button>
+    <button class="pill-btn" id="pipBtn" hidden>Picture in picture</button>
+  </div>
+  <div class="stage" id="stage">
+    <img id="bigArt" alt="">
+    <video id="video" playsinline webkit-playsinline preload="metadata" hidden></video>
+    <audio id="audio" preload="metadata"></audio>
+    <div class="tx-box" id="txBox" aria-label="Transcript"></div>
+  </div>
+  <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div></div>
+  <div class="scrub">
+    <input type="range" id="seek" min="0" max="100" step="1" value="0" aria-label="Position">
+    <div class="times"><span id="tCur">0:00</span><span id="tLeft">-0:00</span></div>
+  </div>
+  <div class="transport">
+    <button class="skip" id="back15" aria-label="Back 15 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v5h5"/></svg><span id="backLbl">15</span></button>
+    <button class="big-play" id="bigPlay" aria-label="Play"></button>
+    <button class="skip" id="fwd30" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/></svg><span id="fwdLbl">30</span></button>
+  </div>
+  <div class="extras">
+    <label for="speedSel">Speed
+      <select id="speedSel"><option value="0.8">0.8×</option><option value="1">1×</option><option value="1.1">1.1×</option><option value="1.2">1.2×</option><option value="1.3">1.3×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option><option value="2.5">2.5×</option></select>
+    </label>
+    <label for="sleepSel">Sleep <span class="sleep-left" id="sleepLeft"></span>
+      <select id="sleepSel"><option value="0">Off</option><option value="5">5 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="end">End of episode</option></select>
+    </label>
+    <button class="pill-btn" id="txBtn" aria-pressed="false">Transcript</button>
+    <button class="pill-btn" id="fsBtn" hidden>Full screen</button>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+(function(){
+"use strict";
+var NEWSLINE = {id:"it:546373540", itunesId:546373540, piId:555292, title:"Amateur Radio Newsline", author:"AR Newsline Staff", feedUrl:"https://www.arnewsline.org/?format=rss", art:"https://is1-ssl.mzstatic.com/image/thumb/Podcasts115/v4/30/4a/2b/304a2bf1-5a78-0250-c9d7-245293b42a2a/mza_14080585935704428882.png/600x600bb.jpg", cat:"Ham Radio"};
+var KEY = "pp.v1";
+var ICON = {
+  play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>',
+  pause:'<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2"/><rect x="14" y="4" width="4.5" height="16" rx="1.2"/></svg>',
+  up:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  grip:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
+  star:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
+  starOn:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
+  chev:'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>'
+};
+var SKIP_EDGE = [0,10,15,20,30,45,60,90,120,180];
+var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
+
+/* ---------- storage ---------- */
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}};}
+var S = load();
+function load(){
+  var s = null;
+  try{ s = JSON.parse(localStorage.getItem(KEY)||"null"); }catch(e){ s = null; }
+  if(!s || typeof s !== "object") s = blank();
+  var b = blank(); for(var k in b){ if(!(k in s)) s[k] = b[k]; }
+  if(!s.seeded){ s.subs[NEWSLINE.id] = NEWSLINE; if(s.fav.indexOf(NEWSLINE.id)<0) s.fav.unshift(NEWSLINE.id); s.seeded = true; }
+  s.fav = s.fav.filter(function(id){return s.subs[id];});
+  return s;
+}
+var saveT = null;
+function save(now){
+  clearTimeout(saveT);
+  var go = function(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ S.cache = {}; try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e2){} } };
+  if(now) go(); else saveT = setTimeout(go, 300);
+}
+
+/* ---------- helpers ---------- */
+function $(id){return document.getElementById(id);}
+function el(tag, attrs, kids){
+  var n = document.createElement(tag);
+  if(attrs) for(var k in attrs){
+    var v = attrs[k]; if(v==null || v===false) continue;
+    if(k==="class") n.className = v; else if(k==="text") n.textContent = v; else if(k==="html") n.innerHTML = v;
+    else if(k.slice(0,2)==="on") n.addEventListener(k.slice(2), v); else n.setAttribute(k, v===true?"":v);
+  }
+  (kids||[]).forEach(function(c){ if(c!=null) n.appendChild(typeof c==="string"?document.createTextNode(c):c); });
+  return n;
+}
+function fmt(t){
+  if(!isFinite(t)||t<0) t=0; t=Math.floor(t);
+  var h=Math.floor(t/3600), m=Math.floor(t%3600/60), s=t%60;
+  return (h? h+":"+String(m).padStart(2,"0") : m)+":"+String(s).padStart(2,"0");
+}
+function fmtDur(sec){ if(!sec) return ""; var m=Math.round(sec/60); return m>=60? Math.floor(m/60)+" hr"+(m%60? " "+(m%60)+" min":"") : m+" min"; }
+function fmtSecs(s){ return !s ? "Off" : s<60 ? s+" sec" : (s%60? (s/60).toFixed(1) : s/60)+" min"; }
+function fmtDate(iso){
+  var d = new Date(iso); if(isNaN(d)) return "";
+  var opts = {month:"short", day:"numeric"}; if(d.getFullYear()!==new Date().getFullYear()) opts.year="numeric";
+  return d.toLocaleDateString(undefined, opts);
+}
+function plain(html){
+  if(!html) return "";
+  try{ var d = new DOMParser().parseFromString("<div>"+String(html).replace(/<(br|\/p|\/li)\s*\/?>/gi,"\n$&")+"</div>","text/html"); return (d.body.textContent||"").replace(/\n{3,}/g,"\n\n").trim(); }catch(e){ return String(html); }
+}
+function toast(msg){ var t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(function(){t.hidden=true;},2600); }
+function normUrl(u){ return String(u||"").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/^www\./,"").replace(/\/+$/,""); }
+function bigArt(u){ return u ? String(u).replace(/\/\d+x\d+bb\./, "/600x600bb.") : ""; }
+function isVideo(type, url){ if(type && /video/i.test(type)) return true; return /\.(mp4|m4v|mov|webm)(\?|$)/i.test(url||""); }
+function subjects(){
+  var set = {}; Object.keys(S.subs).forEach(function(id){ var c = S.subs[id].cat; if(c) set[c] = 1; });
+  return Object.keys(set).sort(function(a,b){return a.localeCompare(b);});
+}
+
+/* Apple's podcast directory, called with JSONP so no CORS setup or key is needed. */
+var jn = 0;
+function jsonp(url){
+  return new Promise(function(res, rej){
+    var cb = "__pp" + (++jn) + "_" + Date.now();
+    var s = document.createElement("script");
+    var timer = setTimeout(function(){ done(); rej(new Error("timeout")); }, 15000);
+    function done(){ clearTimeout(timer); try{ delete window[cb]; }catch(e){ window[cb]=undefined; } s.remove(); }
+    window[cb] = function(data){ done(); res(data); };
+    s.onerror = function(){ done(); rej(new Error("network")); };
+    s.src = url + (url.indexOf("?")<0?"?":"&") + "callback=" + cb;
+    document.head.appendChild(s);
+  });
+}
+function appleSearch(term, limit){
+  return jsonp("https://itunes.apple.com/search?media=podcast&entity=podcast&limit="+(limit||25)+"&term="+encodeURIComponent(term))
+    .then(function(d){ return (d.results||[]).filter(function(r){return r.collectionId;}).map(function(r){
+      return {id:"it:"+r.collectionId, itunesId:r.collectionId, title:r.collectionName||r.trackName, author:r.artistName||"", feedUrl:r.feedUrl||"", art:bigArt(r.artworkUrl600||r.artworkUrl100||""), src:"Apple"};
+    }); });
+}
+
+/* Podcast Index, with the key and secret Kevin saves on this device. */
+function hasPI(){ return !!(S.pi && S.pi.key && S.pi.secret); }
+function sha1(s){
+  return crypto.subtle.digest("SHA-1", new TextEncoder().encode(s)).then(function(b){
+    return Array.prototype.map.call(new Uint8Array(b), function(x){return x.toString(16).padStart(2,"0");}).join("");
+  });
+}
+function pi(path, params){
+  if(!hasPI()) return Promise.reject(new Error("nokey"));
+  var date = String(Math.floor(Date.now()/1000));
+  var qs = Object.keys(params||{}).map(function(k){return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);}).join("&");
+  return sha1(S.pi.key + S.pi.secret + date).then(function(h){
+    return fetch("https://api.podcastindex.org/api/1.0/"+path+(qs?"?"+qs:""), {headers:{"X-Auth-Date":date, "X-Auth-Key":S.pi.key, "Authorization":h}});
+  }).then(function(r){ if(r.status===401) throw new Error("badkey"); if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+}
+function fromPIFeed(f){
+  var it = f.itunesId ? Number(f.itunesId) : 0;
+  return {id: it? "it:"+it : "pi:"+f.id, itunesId: it||null, piId:f.id, title:f.title||"", author:f.author||f.ownerName||"", feedUrl:f.url||f.originalUrl||"", art:f.artwork||f.image||"", src:"Podcast Index", medium:f.medium||""};
+}
+function piSearch(term){ return pi("search/byterm", {q:term, max:30}).then(function(d){ return (d.feeds||[]).map(fromPIFeed); }); }
+
+/* ---------- episodes ---------- */
+var inflight = {};
+function episodesFor(show, force){
+  var c = S.cache[show.id];
+  if(!force && c && Date.now()-c.at < 30*60*1000) return Promise.resolve(c.eps);
+  if(inflight[show.id]) return inflight[show.id];
+  var p = (hasPI() ? fetchPIEps(show).catch(function(){ return fetchAppleOrRss(show); }) : fetchAppleOrRss(show)).then(function(eps){
+    S.cache[show.id] = {at:Date.now(), eps:eps.slice(0,60)}; save(); delete inflight[show.id]; return eps;
+  }, function(err){ delete inflight[show.id]; if(c) return c.eps; throw err; });
+  inflight[show.id] = p; return p;
+}
+function fetchAppleOrRss(show){ return show.itunesId ? fetchAppleEps(show) : fetchRssEps(show); }
+function fetchPIEps(show){
+  var call = show.piId ? pi("episodes/byfeedid", {id:show.piId, max:60, fulltext:""})
+           : show.itunesId ? pi("episodes/byitunesid", {id:show.itunesId, max:60, fulltext:""})
+           : pi("episodes/byfeedurl", {url:show.feedUrl, max:60, fulltext:""});
+  return call.then(function(d){
+    var items = d.items||[]; if(!items.length) throw new Error("empty");
+    if(!show.piId && items[0].feedId){ show.piId = items[0].feedId; }
+    return items.filter(function(i){return i.enclosureUrl;}).map(function(i){
+      var tr = (i.transcripts && i.transcripts.length) ? i.transcripts.map(function(t){return {url:t.url, type:t.type||""};}) : (i.transcriptUrl? [{url:i.transcriptUrl, type:""}] : []);
+      return {g:String(i.guid||i.enclosureUrl), s:show.id, t:i.title||"Episode", d:i.datePublished? new Date(i.datePublished*1000).toISOString() : "",
+        u:i.enclosureUrl, v:isVideo(i.enclosureType, i.enclosureUrl), len:i.duration||0, x:plain(i.description||"").slice(0,1500),
+        a:i.image||i.feedImage||"", ch:i.chaptersUrl||"", tr:tr};
+    });
+  });
+}
+function fetchAppleEps(show){
+  return jsonp("https://itunes.apple.com/lookup?entity=podcastEpisode&limit=100&id="+show.itunesId).then(function(d){
+    var rs = d.results||[];
+    var head = rs.filter(function(r){return r.kind==="podcast";})[0];
+    if(head){ if(!show.feedUrl && head.feedUrl) show.feedUrl = head.feedUrl; if(head.artworkUrl600 && !show.art) show.art = bigArt(head.artworkUrl600); }
+    var eps = rs.filter(function(r){return r.wrapperType==="podcastEpisode" && r.episodeUrl;}).map(function(r){
+      return {g:String(r.episodeGuid||r.episodeUrl), s:show.id, t:r.trackName||"Episode", d:r.releaseDate, u:r.episodeUrl,
+        v:isVideo(r.episodeContentType, r.episodeUrl), len:r.trackTimeMillis? r.trackTimeMillis/1000 : 0,
+        x:plain(r.description||r.shortDescription||"").slice(0,1500), a:bigArt(r.artworkUrl600||r.artworkUrl160||""), ch:"", tr:null};
+    });
+    eps.sort(function(a,b){return new Date(b.d)-new Date(a.d);});
+    if(!eps.length && show.feedUrl) return fetchRssEps(show);
+    return eps;
+  });
+}
+function fetchRssEps(show){
+  if(!show.feedUrl) return Promise.reject(new Error("no feed"));
+  return fetch(show.feedUrl, {mode:"cors"}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); }).then(function(txt){
+    var x = new DOMParser().parseFromString(txt, "application/xml");
+    var ch = x.querySelector("channel");
+    if(ch && !show.art){ var img = ch.querySelector("image > url"); var it = ch.getElementsByTagNameNS("*","image")[0]; show.art = (it && it.getAttribute("href")) || (img && img.textContent) || ""; }
+    return rssItems(x, show.id);
+  });
+}
+function rssItems(x, sid){
+  return Array.prototype.slice.call(x.querySelectorAll("item")).map(function(item){
+    var enc = item.querySelector("enclosure"); if(!enc) return null;
+    var u = enc.getAttribute("url"); var g = item.querySelector("guid");
+    var durEl = item.getElementsByTagNameNS("*","duration")[0]; var dur = 0;
+    if(durEl){ var p = durEl.textContent.trim().split(":").map(Number); dur = p.reduce(function(a,b){return a*60+b;},0)||0; }
+    var title = item.querySelector("title"); var date = item.querySelector("pubDate"); var desc = item.querySelector("description");
+    var tr = Array.prototype.map.call(item.getElementsByTagNameNS("*","transcript"), function(t){ return {url:t.getAttribute("url"), type:t.getAttribute("type")||""}; }).filter(function(t){return t.url;});
+    var chEl = item.getElementsByTagNameNS("*","chapters")[0];
+    return {g:String((g&&g.textContent)||u), s:sid, t:title?title.textContent:"Episode", d:date?new Date(date.textContent).toISOString():"",
+      u:u, v:isVideo(enc.getAttribute("type"), u), len:dur, x:plain(desc?desc.textContent:"").slice(0,1500), a:"", ch: chEl? chEl.getAttribute("url")||"" : "", tr:tr};
+  }).filter(Boolean);
+}
+
+/* ---------- navigation ---------- */
+var route = {tab:"home"}; var arranging = false; var filterCat = "";
+function go(r){ route = r; render(); $("scroller").scrollTop = 0; }
+document.querySelectorAll(".tabs button").forEach(function(b){
+  b.addEventListener("click", function(){ arranging=false; go({tab:b.dataset.tab}); });
+});
+$("scroller").addEventListener("scroll", function(){ $("topbar").classList.toggle("scrolled", $("scroller").scrollTop>4); }, {passive:true});
+
+function render(){
+  document.querySelectorAll(".tabs button").forEach(function(b){ if(b.dataset.tab===route.tab) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current"); });
+  var top = $("topbar"), view = $("view"); top.innerHTML = ""; view.innerHTML = "";
+  view.classList.toggle("arranging", arranging && !route.show && route.tab==="home");
+  if(route.show) return renderShow(top, view, route.show);
+  if(route.tab==="search") return renderSearch(top, view);
+  if(route.tab==="settings") return renderSettings(top, view);
+  renderHome(top, view);
+}
+
+/* ---------- Home ---------- */
+function renderHome(top, view){
+  top.appendChild(el("h1",{text:"Shows"}));
+  if(S.fav.length>1 || arranging) top.appendChild(el("button",{class:"pill-btn"+(arranging?" on":""), text:arranging?"Done":"Arrange", onclick:function(){arranging=!arranging; if(arranging) filterCat=""; render();}}));
+
+  var subs = subjects();
+  if(filterCat && subs.indexOf(filterCat)<0 && filterCat!=="-") filterCat = "";
+  var inCat = function(sh){ return !filterCat || (filterCat==="-" ? !sh.cat : sh.cat===filterCat); };
+  if(subs.length && !arranging){
+    var chips = el("div",{class:"chips", role:"group", "aria-label":"Filter by subject"});
+    var mk = function(label, val){ chips.appendChild(el("button",{class:"chip", "aria-pressed":String(filterCat===val), text:label, onclick:function(){ filterCat = val; render(); }})); };
+    mk("All", ""); subs.forEach(function(c){ mk(c, c); }); mk("No subject", "-");
+    view.appendChild(chips);
+  }
+
+  var favSec = el("section");
+  favSec.appendChild(el("h2",{class:"section-label", text:"Favorites, in your order"}));
+  var favIds = S.fav.filter(function(id){ return inCat(S.subs[id]); });
+  if(!S.fav.length){
+    favSec.appendChild(el("p",{class:"empty", text:"Tap the star on any show to add it here. Favorites stay in the order you set with Arrange."}));
+  } else if(!favIds.length){
+    favSec.appendChild(el("p",{class:"note", text:"No favorites in this subject."}));
+  } else {
+    var ul = el("ul",{class:"fav-list", id:"favList"});
+    favIds.forEach(function(id){ ul.appendChild(favRow(S.subs[id], S.fav.indexOf(id))); });
+    favSec.appendChild(ul);
+    if(arranging) favSec.appendChild(el("p",{class:"note", style:"margin-top:10px", text:"Drag the grip, or use the arrows. Your order saves as you go."}));
+  }
+  view.appendChild(favSec);
+  if(arranging){ enableDrag($("favList")); return; }
+
+  var others = Object.keys(S.subs).filter(function(id){return S.fav.indexOf(id)<0 && inCat(S.subs[id]);}).map(function(id){return S.subs[id];})
+    .sort(function(a,b){return a.title.localeCompare(b.title);});
+  var oSec = el("section");
+  oSec.appendChild(el("h2",{class:"section-label", text:"Other subscriptions"}));
+  if(!others.length){
+    oSec.appendChild(el("p",{class:"note", text: filterCat ? "Nothing else in this subject." : "Shows you follow without starring land here, grouped by subject. Find shows in Search, or bring your Overcast list over in Settings."}));
+  } else if(filterCat || !subs.length){
+    var ol = el("ul",{class:"show-list"}); others.forEach(function(sh){ ol.appendChild(showRow(sh)); }); oSec.appendChild(ol);
+  } else {
+    subs.concat([""]).forEach(function(c){
+      var group = others.filter(function(sh){ return (sh.cat||"")===c; }); if(!group.length) return;
+      oSec.appendChild(el("h3",{class:"group-label", text:c||"No subject"}));
+      var gl = el("ul",{class:"show-list"}); group.forEach(function(sh){ gl.appendChild(showRow(sh)); }); oSec.appendChild(gl);
+    });
+  }
+  view.appendChild(oSec);
+}
+function favRow(sh, i){
+  var latest = el("div",{class:"latest", text:"Loading latest episode…"});
+  var play = el("button",{class:"play-btn", "aria-label":"Play latest episode of "+sh.title, html:ICON.play, disabled:true});
+  var li = el("li",{class:"fav", "data-id":sh.id},[
+    el("span",{class:"rank", text:String(i+1)}),
+    el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
+    el("div",{class:"meta"},[ sh.cat? el("div",{class:"subj", text:sh.cat}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id}); }}), latest ]),
+    play,
+    el("div",{class:"arrange-tools"},[
+      el("button",{class:"icon-btn", "aria-label":"Move "+sh.title+" up", html:ICON.up, disabled:i===0, onclick:function(){ moveFav(i,i-1); }}),
+      el("button",{class:"icon-btn", "aria-label":"Move "+sh.title+" down", html:ICON.down, disabled:i===S.fav.length-1, onclick:function(){ moveFav(i,i+1); }}),
+      el("button",{class:"icon-btn handle", "aria-label":"Drag to reorder", html:ICON.grip})
+    ])
+  ]);
+  if(!arranging) episodesFor(sh).then(function(eps){
+    var e = eps[0];
+    if(!e){ latest.textContent = "No episodes found"; return; }
+    latest.innerHTML = ""; latest.appendChild(el("b",{text:e.t})); latest.appendChild(document.createTextNode(" · "+fmtDate(e.d)+(e.v?" · Video":"")+(S.played[e.g]?" · Played":"")));
+    play.disabled = false; play.onclick = function(){ playEp(e, true); };
+  }, function(){ latest.textContent = "Couldn't load episodes. Check your connection."; });
+  return li;
+}
+function moveFav(a, b){
+  if(b<0 || b>=S.fav.length) return;
+  var id = S.fav.splice(a,1)[0]; S.fav.splice(b,0,id); save(); render();
+}
+function enableDrag(list){
+  if(!list) return;
+  list.querySelectorAll(".handle").forEach(function(h){
+    h.addEventListener("pointerdown", function(ev){
+      ev.preventDefault();
+      var item = h.closest(".fav"); var rect = item.getBoundingClientRect(); var startY = ev.clientY;
+      var ph = el("li",{class:"fav placeholder", style:"height:"+rect.height+"px"});
+      item.parentNode.insertBefore(ph, item);
+      item.classList.add("dragging");
+      item.style.position="fixed"; item.style.left=rect.left+"px"; item.style.top=rect.top+"px"; item.style.width=rect.width+"px";
+      try{ h.setPointerCapture(ev.pointerId); }catch(e){}
+      function move(e){
+        var dy = e.clientY - startY; item.style.top = (rect.top+dy)+"px";
+        var sibs = Array.prototype.filter.call(list.children, function(c){return c!==item && c!==ph;});
+        var placed = false;
+        for(var k=0;k<sibs.length;k++){ var r = sibs[k].getBoundingClientRect(); if(e.clientY < r.top + r.height/2){ list.insertBefore(ph, sibs[k]); placed=true; break; } }
+        if(!placed) list.appendChild(ph);
+        var sc = $("scroller").getBoundingClientRect();
+        if(e.clientY < sc.top+50) $("scroller").scrollTop -= 8; else if(e.clientY > sc.bottom-140) $("scroller").scrollTop += 8;
+      }
+      function up(){
+        h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
+        list.insertBefore(item, ph); ph.remove(); item.removeAttribute("style"); item.classList.remove("dragging");
+        S.fav = Array.prototype.map.call(list.querySelectorAll(".fav"), function(n){return n.dataset.id;}); save(); render();
+      }
+      h.addEventListener("pointermove", move); h.addEventListener("pointerup", up); h.addEventListener("pointercancel", up);
+    });
+  });
+}
+function showRow(sh){
+  var subbed = !!S.subs[sh.id];
+  return el("li",{class:"show-row"},[
+    el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
+    el("button",{class:"row-link", onclick:function(){ go({tab:route.tab, show:sh.id, temp:subbed?null:sh}); }},[
+      el("div",{class:"t", text:sh.title}), el("div",{class:"a", text:(sh.author||"")+(sh.medium==="video"?" · Video":"")})
+    ]),
+    starBtn(sh)
+  ]);
+}
+function starBtn(sh){
+  var on = S.fav.indexOf(sh.id)>=0;
+  return el("button",{class:"star"+(on?" on":""), "aria-label":on?"Remove from favorites":"Add to favorites", "aria-pressed":on?"true":"false", html:on?ICON.starOn:ICON.star, onclick:function(){ toggleFav(sh); render(); }});
+}
+function toggleFav(sh){
+  var i = S.fav.indexOf(sh.id);
+  if(i>=0){ S.fav.splice(i,1); toast("Removed from favorites"); }
+  else { S.subs[sh.id] = S.subs[sh.id] || sh; S.fav.push(sh.id); toast("Added to favorites at #"+S.fav.length); }
+  save();
+}
+
+/* ---------- Show page ---------- */
+var tempShows = {};
+function renderShow(top, view, id){
+  if(route.temp) tempShows[id] = route.temp;
+  var sh = S.subs[id] || tempShows[id];
+  if(!sh){ go({tab:route.tab}); return; }
+  top.appendChild(el("button",{class:"back", html:ICON.chev+"<span>Back</span>", onclick:function(){ go({tab:route.tab}); }}));
+  top.appendChild(el("div",{class:"sub-title", text:sh.title}));
+  top.appendChild(el("span",{style:"width:60px"}));
+  var subbed = !!S.subs[sh.id], fav = S.fav.indexOf(sh.id)>=0;
+  var actions = el("div",{class:"show-actions"},[
+    el("button",{class:"pill-btn"+(fav?" on":""), text:fav?"★ Favorite":"☆ Favorite", onclick:function(){ toggleFav(sh); render(); }}),
+    subbed ? el("button",{class:"pill-btn", text:"Unfollow", onclick:function(){ unfollow(sh); }})
+           : el("button",{class:"pill-btn", text:"Follow", onclick:function(){ S.subs[sh.id]=sh; save(); toast("Following "+sh.title); render(); }})
+  ]);
+  view.appendChild(el("div",{class:"show-head"},[ el("img",{src:sh.art||"", alt:""}), el("div",null,[ el("h2",{text:sh.title}), el("p",{class:"a", text:sh.author||""}), actions ]) ]));
+  if(subbed) view.appendChild(showSettings(sh));
+  var listWrap = el("section",null,[ el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"}) ]);
+  view.appendChild(listWrap);
+  episodesFor(sh, true).then(function(eps){
+    listWrap.innerHTML = "";
+    if(!eps.length){ listWrap.appendChild(el("p",{class:"empty", text:"No episodes found for this show."})); return; }
+    var n = eps.filter(function(e){return e.v;}).length;
+    listWrap.appendChild(el("h2",{class:"section-label", text:eps.length+" recent episodes"+(n? " · "+n+" video":"")}));
+    var ul = el("ul",{class:"eps"}); eps.forEach(function(e){ ul.appendChild(epRow(e, sh)); }); listWrap.appendChild(ul);
+  }, function(){
+    listWrap.innerHTML = "";
+    listWrap.appendChild(el("p",{class:"empty", text: sh.itunesId || hasPI() ? "Couldn't reach the podcast directory. Check your connection and try again." : "This show isn't in Apple's directory and its feed doesn't let web apps read it. Adding your Podcast Index key in Settings may fix that."}));
+  });
+}
+function showSettings(sh){
+  var subs = subjects();
+  var catSel = el("select",{id:"catSel"},[ el("option",{value:"", text:"No subject"}) ]
+    .concat(subs.map(function(c){ return el("option",{value:c, text:c, selected:sh.cat===c}); }))
+    .concat([ el("option",{value:"__new", text:"New subject…"}) ]));
+  var newInp = el("input",{id:"catNew", type:"text", placeholder:"e.g. Ham Radio", hidden:true, maxlength:"30", enterkeyhint:"done"});
+  var commit = function(){ var v = newInp.value.trim(); if(!v) return; sh.cat = v; save(); toast("Subject set to "+v); render(); };
+  catSel.onchange = function(){
+    if(this.value==="__new"){ newInp.hidden = false; newInp.focus(); return; }
+    sh.cat = this.value || ""; if(!sh.cat) delete sh.cat; save(); toast(sh.cat? "Subject set to "+sh.cat : "Subject cleared");
+  };
+  newInp.addEventListener("keydown", function(e){ if(e.key==="Enter"){ e.preventDefault(); commit(); } });
+  newInp.addEventListener("blur", commit);
+  var edgeSel = function(id, key){
+    var s = el("select",{id:id}, SKIP_EDGE.map(function(v){ return el("option",{value:String(v), text:fmtSecs(v), selected:(sh[key]||0)===v}); }));
+    s.onchange = function(){ sh[key] = parseInt(this.value,10)||0; save(); };
+    return s;
+  };
+  return el("div",{class:"card"},[
+    el("div",{class:"form-grid"},[
+      el("label",{class:"field", for:"catSel"},[ "Subject", catSel, newInp ]),
+      el("label",{class:"field", for:"skipStartSel"},[ "Skip at start", edgeSel("skipStartSel","skipStart") ]),
+      el("label",{class:"field", for:"skipEndSel"},[ "Skip at end", edgeSel("skipEndSel","skipEnd") ])
+    ]),
+    el("p",{text:"Use the skip settings to jump past this show's opening and closing ads or intros. Ads that the show marks in its chapters are skipped automatically."})
+  ]);
+}
+function unfollow(sh){
+  delete S.subs[sh.id]; var i = S.fav.indexOf(sh.id); if(i>=0) S.fav.splice(i,1); delete S.cache[sh.id]; save(); toast("Unfollowed "+sh.title); go({tab:"home"});
+}
+function epRow(e, sh){
+  var pos = S.pos[e.g]||0, played = !!S.played[e.g];
+  var len = e.len || (S.pos[e.g+"#len"]||0);
+  var when = el("div",{class:"when"},[ fmtDate(e.d) ]);
+  if(len) when.appendChild(document.createTextNode("· "+fmtDur(len)));
+  if(e.v) when.appendChild(el("span",{class:"badge video", text:"Video"}));
+  if(e.tr && e.tr.length) when.appendChild(el("span",{class:"badge done", text:"Transcript"}));
+  if(played) when.appendChild(el("span",{class:"badge done", text:"Played"}));
+  else if(pos>5 && len) when.appendChild(el("span",{class:"badge left", text:fmtDur(len-pos)+" left"}));
+  var desc = el("div",{class:"desc", text:e.x||""}); desc.hidden = true;
+  var li = el("li",{class:"ep"+(played?" played":"")},[
+    el("div",null,[ when, el("button",{class:"title", text:e.t, "aria-expanded":"false", onclick:function(){ desc.hidden=!desc.hidden; this.setAttribute("aria-expanded", String(!desc.hidden)); }}) ]),
+    el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true); }}),
+    desc
+  ]);
+  if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
+  return li;
+}
+
+/* ---------- Search: Podcast Index first, Apple Podcasts second ---------- */
+var lastSearch = {q:"", pi:null, apple:null, piErr:""};
+function renderSearch(top, view){
+  top.appendChild(el("h1",{text:"Search"}));
+  var input = el("input",{type:"search", id:"q", placeholder:"Show name or topic", value:lastSearch.q, autocomplete:"off", enterkeyhint:"search", "aria-label":"Search podcasts"});
+  view.appendChild(el("form",{class:"search-box", onsubmit:function(ev){ ev.preventDefault(); input.blur(); doSearch(input.value); }},[ input, el("button",{class:"btn", type:"submit", text:"Search"}) ]));
+  var out = el("section",{id:"results", style:"display:flex;flex-direction:column;gap:18px"}); view.appendChild(out);
+  if(lastSearch.q) drawResults(out);
+  else out.appendChild(el("p",{class:"note", text: hasPI() ? "Searches Podcast Index first, then Apple Podcasts if you don't see the show. Both include video podcasts." : "Searching Apple Podcasts. Add your free Podcast Index key in Settings and it will search Podcast Index first."}));
+}
+function doSearch(q){
+  q = (q||"").trim(); if(!q) return;
+  lastSearch = {q:q, pi:null, apple:null, piErr:""};
+  var out = $("results"); out.innerHTML = ""; out.appendChild(el("div",{class:"spinner", role:"status", "aria-label":"Searching"}));
+  var first = hasPI() ? piSearch(q).then(function(rs){ lastSearch.pi = rs; if(!rs.length) return searchApple(); }, function(err){ lastSearch.piErr = err.message==="badkey" ? "Podcast Index turned down your key. Check it in Settings." : "Podcast Index didn't answer, so these are from Apple Podcasts."; lastSearch.pi = []; return searchApple(); })
+                      : searchApple();
+  first.then(function(){ if(lastSearch.q===q) drawResults($("results")); });
+}
+function searchApple(){
+  var q = lastSearch.q;
+  return appleSearch(q, 30).then(function(rs){ if(lastSearch.q===q) lastSearch.apple = rs; }, function(){ if(lastSearch.q===q) lastSearch.apple = "err"; });
+}
+function drawResults(out){
+  if(!out) return; out.innerHTML = "";
+  if(lastSearch.piErr) out.appendChild(el("p",{class:"status err", text:lastSearch.piErr}));
+  var block = function(label, rs){
+    var sec = el("div"); sec.appendChild(el("h2",{class:"section-label", text:label}));
+    if(rs==="err") sec.appendChild(el("p",{class:"status err", text:"That search didn't go through. Check your connection and try again."}));
+    else if(!rs.length) sec.appendChild(el("p",{class:"note", text:"No shows matched."}));
+    else { var ul = el("ul",{class:"show-list"}); rs.forEach(function(sh){ ul.appendChild(showRow(S.subs[sh.id]||sh)); }); sec.appendChild(ul); }
+    out.appendChild(sec);
+  };
+  if(lastSearch.pi && (lastSearch.pi.length || !lastSearch.piErr)) block("From Podcast Index", lastSearch.pi);
+  if(lastSearch.apple) block("From Apple Podcasts", lastSearch.apple);
+  else if(lastSearch.pi && lastSearch.pi.length){
+    out.appendChild(el("button",{class:"btn secondary", text:"Not here? Search Apple Podcasts too", onclick:function(){
+      this.disabled = true; this.textContent = "Searching Apple Podcasts…"; searchApple().then(function(){ drawResults($("results")); });
+    }}));
+  }
+}
+
+/* ---------- Settings ---------- */
+function renderSettings(top, view){
+  top.appendChild(el("h1",{text:"Settings"}));
+
+  var sel = function(id, opts, val, onch){ var s = el("select",{id:id}, opts.map(function(v){ return el("option",{value:String(v), text:v+" sec", selected:v===val}); })); s.onchange = onch; return s; };
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Playback"}),
+    el("div",{class:"form-grid"},[
+      el("label",{class:"field", for:"backSel"},[ "Skip back", sel("backSel",[5,10,15,20,30,45,60], S.skipBack, function(){ S.skipBack = parseInt(this.value,10); save(); applySkipLabels(); }) ]),
+      el("label",{class:"field", for:"fwdSel"},[ "Skip forward", sel("fwdSel",[10,15,30,45,60,90,120], S.skipFwd, function(){ S.skipFwd = parseInt(this.value,10); save(); applySkipLabels(); }) ]),
+      el("label",{class:"field", for:"adSel"},[ "Ads marked in chapters", (function(){ var s = el("select",{id:"adSel"},[ el("option",{value:"1", text:"Skip them", selected:S.adSkip}), el("option",{value:"0", text:"Play them", selected:!S.adSkip}) ]); s.onchange=function(){ S.adSkip = this.value==="1"; save(); }; return s; })() ])
+    ]),
+    el("p",{text:"Each show also has its own Skip at start and Skip at end setting on its page."})
+  ]));
+
+  var piStatus = el("p",{class:"status", id:"piStatus", "aria-live":"polite", text: hasPI()? "Key saved on this device." : ""});
+  var keyInp = el("input",{id:"piKey", type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", value:S.pi.key||"", placeholder:"API key"});
+  var secInp = el("input",{id:"piSecret", type:"password", autocomplete:"off", value:S.pi.secret||"", placeholder:"API secret"});
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Podcast Index search"}),
+    el("p",{text:"Podcast Index is searched first when you add your free key here. Sign up at api.podcastindex.org; they email you a key and a secret. Both stay on this device only."}),
+    el("div",{class:"form-grid"},[ el("label",{class:"field", for:"piKey"},[ "API key", keyInp ]), el("label",{class:"field", for:"piSecret"},[ "API secret", secInp ]) ]),
+    el("div",{class:"btn-row"},[
+      el("button",{class:"btn", text:"Save and test", onclick:function(){
+        S.pi = {key:keyInp.value.trim(), secret:secInp.value.trim()}; save(true); S.cache = {};
+        if(!hasPI()){ piStatus.className="status"; piStatus.textContent = "Key cleared. Search uses Apple Podcasts."; return; }
+        piStatus.className="status"; piStatus.textContent = "Testing…";
+        piSearch("amateur radio newsline").then(function(rs){ piStatus.textContent = "Works. Podcast Index found "+rs.length+" match"+(rs.length===1?"":"es")+" for a test search."; },
+          function(err){ piStatus.className="status err"; piStatus.textContent = err.message==="badkey" ? "Podcast Index turned that key down. Check both values and try again." : "Couldn't reach Podcast Index just now. The key is saved; try again later."; });
+      }}),
+      hasPI()? el("button",{class:"btn secondary", text:"Remove key", onclick:function(){ S.pi = {key:"",secret:""}; S.cache = {}; save(true); render(); }}) : null
+    ]),
+    piStatus
+  ]));
+
+  var status = el("p",{class:"status", id:"importStatus", "aria-live":"polite"});
+  var file = el("input",{type:"file", id:"opml", accept:".opml,.xml,text/xml,application/xml,text/x-opml", hidden:true, onchange:function(){ if(this.files[0]) importOpml(this.files[0], status); this.value=""; }});
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Bring your shows over from Overcast"}),
+    el("ol",{class:"steps"},[
+      el("li",{text:"In Overcast, tap the Overcast logo at the top left, then Settings."}),
+      el("li",{text:"Scroll down, tap Export OPML, and save the file to Files."}),
+      el("li",{text:"Come back here, tap Import OPML file, and pick that file."})
+    ]),
+    el("div",{class:"btn-row"},[ el("button",{class:"btn", text:"Import OPML file", onclick:function(){ file.click(); }}) ]),
+    file, status
+  ]));
+
+  var rfile = el("input",{type:"file", id:"restore", accept:".json,application/json", hidden:true, onchange:function(){ if(this.files[0]) restore(this.files[0]); this.value=""; }});
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Backup, and moving between iPhone and iPad"}),
+    el("p",{text:"Your shows, subjects, favorites order and listening spots are kept on this device only. Save a backup here, then restore it on your other device (AirDrop or iCloud Drive works)."}),
+    el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Save backup", onclick:backup}), el("button",{class:"btn secondary", text:"Restore backup", onclick:function(){ rfile.click(); }}) ]),
+    rfile
+  ]));
+
+  var n = Object.keys(S.subs).length;
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"About this app"}),
+    el("p",{text:"Following "+n+" show"+(n===1?"":"s")+", "+S.fav.length+" favorite"+(S.fav.length===1?"":"s")+"."}),
+    el("p",{text:"Audio keeps playing with the screen locked and shows lock screen controls. Video plays in the app or in Picture in Picture; iOS pauses video when you leave the app without Picture in Picture. Episodes stream; there is no download for offline listening."}),
+    el("p",{text:"Transcripts appear when a show publishes one. Ad skipping covers ads a show marks in its chapters and the start and end amounts you set; ads read in the middle of a show can't be detected."})
+  ]));
+}
+function importOpml(f, status){
+  status.className = "status"; status.textContent = "Reading file…";
+  f.text().then(function(txt){
+    var x = new DOMParser().parseFromString(txt, "application/xml");
+    var outs = Array.prototype.slice.call(x.querySelectorAll("outline[xmlUrl], outline[xmlurl]"));
+    var feeds = outs.map(function(o){ return {url:o.getAttribute("xmlUrl")||o.getAttribute("xmlurl"), title:o.getAttribute("title")||o.getAttribute("text")||""}; }).filter(function(f){return f.url;});
+    if(!feeds.length){ status.className="status err"; status.textContent = "That file has no podcast feeds in it. Make sure it's the OPML export from Overcast."; return; }
+    var done = 0, added = 0, unmatched = 0, i = 0;
+    status.textContent = "Matching 0 of "+feeds.length+" shows…";
+    function next(){
+      if(i >= feeds.length) return Promise.resolve();
+      var f = feeds[i++];
+      return matchFeed(f).then(function(sh){
+        if(!S.subs[sh.id]){ S.subs[sh.id] = sh; added++; } if(!sh.itunesId && !sh.piId) unmatched++;
+      }).catch(function(){}).then(function(){ done++; status.textContent = "Matching "+done+" of "+feeds.length+" shows…"; save(); return next(); });
+    }
+    return Promise.all([next(), next(), next()]).then(function(){
+      save(true);
+      status.textContent = "Done. Added "+added+" new show"+(added===1?"":"s")+" from "+feeds.length+" in the file."+(unmatched? " "+unmatched+" weren't found in a directory and may not load.":"")+" Star your favorites and give shows a subject on their pages.";
+    });
+  }).catch(function(){ status.className="status err"; status.textContent = "Couldn't read that file. Try exporting it from Overcast again."; });
+}
+function matchFeed(f){
+  var want = normUrl(f.url);
+  var existing = Object.keys(S.subs).map(function(k){return S.subs[k];}).filter(function(s){return normUrl(s.feedUrl)===want;})[0];
+  if(existing) return Promise.resolve(existing);
+  var fallback = {id:"rss:"+f.url, title:f.title||f.url, author:"", feedUrl:f.url, art:""};
+  var viaPI = hasPI() ? pi("podcasts/byfeedurl", {url:f.url}).then(function(d){ if(d && d.feed && d.feed.id) return fromPIFeed(d.feed); throw new Error("none"); }) : Promise.reject(new Error("nokey"));
+  return viaPI.catch(function(){
+    if(!f.title) return fallback;
+    return appleSearch(f.title, 15).then(function(rs){
+      var hit = rs.filter(function(r){return normUrl(r.feedUrl)===want;})[0]
+             || rs.filter(function(r){return r.title.trim().toLowerCase()===f.title.trim().toLowerCase();})[0];
+      return hit || fallback;
+    }, function(){ return fallback; });
+  });
+}
+function backup(){
+  var data = {app:"podcast-player", v:1, at:new Date().toISOString(), subs:S.subs, fav:S.fav, pos:S.pos, played:S.played, speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip};
+  var blob = new Blob([JSON.stringify(data)], {type:"application/json"});
+  var name = "podcast-player-backup-"+new Date().toISOString().slice(0,10)+".json";
+  var f = null; try{ f = new File([blob], name, {type:"application/json"}); }catch(e){}
+  if(f && navigator.canShare && navigator.canShare({files:[f]})){ navigator.share({files:[f], title:"Podcast Player backup"}).catch(function(){}); return; }
+  var a = el("a",{href:URL.createObjectURL(blob), download:name}); document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+function restore(f){
+  f.text().then(function(t){
+    var d = JSON.parse(t); if(!d || d.app!=="podcast-player") throw new Error("bad");
+    S.subs = d.subs||{}; S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
+    if(d.skipBack) S.skipBack = d.skipBack; if(d.skipFwd) S.skipFwd = d.skipFwd; if(typeof d.adSkip==="boolean") S.adSkip = d.adSkip; S.cache = {};
+    save(true); applySkipLabels(); toast("Backup restored"); go({tab:"home"});
+  }).catch(function(){ toast("That isn't a Podcast Player backup file"); });
+}
+
+/* ---------- Player ---------- */
+var audio = $("audio"), video = $("video"), media = audio, cur = null, sleepEnd = 0, sleepTimer = null, lastSaved = 0;
+var ads = [], endSkipped = false;
+function applySkipLabels(){
+  $("backLbl").textContent = S.skipBack; $("fwdLbl").textContent = S.skipFwd;
+  $("back15").setAttribute("aria-label","Back "+S.skipBack+" seconds"); $("fwd30").setAttribute("aria-label","Forward "+S.skipFwd+" seconds");
+  $("miniBack").setAttribute("aria-label","Back "+S.skipBack+" seconds");
+  setMediaSession();
+}
+function setPlayIcons(){
+  var playing = !media.paused && !media.ended;
+  [$("bigPlay"), $("miniPlay")].forEach(function(b){ b.innerHTML = playing?ICON.pause:ICON.play; b.setAttribute("aria-label", playing?"Pause":"Play"); });
+  if("mediaSession" in navigator) try{ navigator.mediaSession.playbackState = playing?"playing":"paused"; }catch(e){}
+}
+function showOf(id){ return S.subs[id] || tempShows[id] || {title:""}; }
+function playEp(e, autoplay){
+  var showObj = showOf(e.s);
+  if(cur && cur.g===e.g){ if(autoplay){ media.play().catch(function(){}); } openPlayer(); return; }
+  savePos(true);
+  cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||""};
+  S.now = cur; save();
+  ads = []; endSkipped = false; resetTranscript();
+  var other = e.v ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
+  media = e.v ? video : audio;
+  video.hidden = !e.v; $("bigArt").hidden = !!e.v; $("pipBtn").hidden = !e.v || !pipSupported(); $("fsBtn").hidden = !e.v;
+  media.src = e.u; media.playbackRate = S.speed||1; media.defaultPlaybackRate = S.speed||1;
+  var start = S.pos[e.g]||0, intro = showObj.skipStart||0;
+  media.addEventListener("loadedmetadata", function once(){
+    media.removeEventListener("loadedmetadata", once);
+    var target = start>5 ? start : 0;
+    if(intro && target < intro && (!media.duration || intro < media.duration-30)){ target = intro; if(autoplay) toast("Skipped the first "+fmtSecs(intro)); }
+    if(target>0 && (!media.duration || target < media.duration-10)) try{ media.currentTime = target; }catch(x){}
+    media.playbackRate = S.speed||1;
+  });
+  if(cur.ch) loadChapters(cur);
+  fillNowPlaying();
+  if(autoplay){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); openPlayer(); }
+  setMediaSession();
+}
+function loadChapters(c){
+  fetch(c.ch).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
+    if(!cur || cur.g!==c.g) return;
+    var list = (j.chapters||[]).slice().sort(function(a,b){return a.startTime-b.startTime;});
+    ads = list.map(function(ch, i){
+      if(!AD_RE.test(ch.title||"")) return null;
+      var end = ch.endTime || (list[i+1] ? list[i+1].startTime : 0);
+      return {s:ch.startTime||0, e:end||0, t:ch.title};
+    }).filter(Boolean);
+  }).catch(function(){ ads = []; });
+}
+function fillNowPlaying(){
+  if(!cur) return;
+  $("mini").hidden = false; $("miniArt").src = cur.a||""; $("miniTitle").textContent = cur.t; $("miniShow").textContent = cur.show||"";
+  $("bigArt").src = cur.a||""; $("pTitle").textContent = cur.t; $("pShow").textContent = cur.show||"";
+  $("speedSel").value = String(S.speed||1); setPlayIcons();
+}
+function openPlayer(){ $("player").classList.add("open"); $("player").setAttribute("aria-hidden","false"); }
+function closePlayer(){ $("player").classList.remove("open"); $("player").setAttribute("aria-hidden","true"); }
+$("playerClose").onclick = closePlayer; $("miniOpen").onclick = openPlayer;
+function toggle(){ if(!cur) return; if(media.paused){ var p=media.play(); if(p&&p.catch) p.catch(function(){}); } else media.pause(); }
+$("bigPlay").onclick = toggle; $("miniPlay").onclick = toggle;
+function skip(d){ if(!cur) return; try{ media.currentTime = Math.max(0, Math.min((media.duration||1e9)-1, media.currentTime + d)); }catch(e){} }
+$("back15").onclick = function(){ skip(-S.skipBack); }; $("miniBack").onclick = function(){ skip(-S.skipBack); }; $("fwd30").onclick = function(){ skip(S.skipFwd); };
+var seeking = false;
+$("seek").addEventListener("input", function(){ seeking = true; var d = media.duration||0; $("tCur").textContent = fmt(this.value/1000*d); });
+$("seek").addEventListener("change", function(){ var d = media.duration||0; if(d) try{ media.currentTime = this.value/1000*d; }catch(e){} seeking = false; });
+$("speedSel").onchange = function(){ S.speed = parseFloat(this.value)||1; media.playbackRate = S.speed; media.defaultPlaybackRate = S.speed; save(); updatePositionState(); };
+$("sleepSel").onchange = function(){
+  clearInterval(sleepTimer); sleepEnd = 0; $("sleepLeft").textContent = "";
+  var v = this.value; if(v==="0") return;
+  if(v==="end"){ sleepEnd = -1; $("sleepLeft").textContent = "end"; toast("Stops at the end of this episode"); return; }
+  sleepEnd = Date.now() + parseInt(v,10)*60000; toast("Sleep timer set for "+this.options[this.selectedIndex].text);
+  sleepTimer = setInterval(function(){
+    var left = sleepEnd - Date.now();
+    if(left <= 0){ clearInterval(sleepTimer); sleepEnd = 0; fadeOut(); $("sleepSel").value="0"; $("sleepLeft").textContent=""; return; }
+    $("sleepLeft").textContent = fmt(left/1000);
+  }, 1000);
+};
+function fadeOut(){
+  var v0 = media.volume, steps = 10, k = 0;
+  var t = setInterval(function(){ k++; try{ media.volume = Math.max(0, v0*(1-k/steps)); }catch(e){} if(k>=steps){ clearInterval(t); media.pause(); try{ media.volume = v0; }catch(e){} skip(-10); } }, 300);
+}
+function pipSupported(){ return !!(document.pictureInPictureEnabled || (video.webkitSupportsPresentationMode && video.webkitSupportsPresentationMode("picture-in-picture"))); }
+$("pipBtn").onclick = function(){
+  try{
+    if(video.webkitSupportsPresentationMode && video.webkitSupportsPresentationMode("picture-in-picture")) video.webkitSetPresentationMode(video.webkitPresentationMode==="picture-in-picture"?"inline":"picture-in-picture");
+    else if(document.pictureInPictureElement) document.exitPictureInPicture(); else video.requestPictureInPicture().catch(function(){ toast("Picture in Picture isn't available here"); });
+  }catch(e){ toast("Picture in Picture isn't available here"); }
+};
+$("fsBtn").onclick = function(){ try{ if(video.webkitEnterFullscreen) video.webkitEnterFullscreen(); else if(video.requestFullscreen) video.requestFullscreen().catch(function(){}); }catch(e){} };
+
+function onTime(){
+  var d = media.duration||0, t = media.currentTime||0;
+  if(S.adSkip && ads.length && !media.paused){
+    for(var i=0;i<ads.length;i++){ var a = ads[i]; var end = a.e || d; if(t >= a.s && t < end-0.5){ try{ media.currentTime = end; }catch(e){} toast("Skipped "+(a.t||"ad")); return; } }
+  }
+  var outro = (showOf(cur && cur.s).skipEnd)||0;
+  if(outro && d && !endSkipped && !media.paused && t >= d - outro && d > outro + 30){ endSkipped = true; toast("Skipped the last "+fmtSecs(outro)); finishEpisode(); media.pause(); return; }
+  if(!seeking){ $("seek").value = d? Math.round(t/d*1000) : 0; $("tCur").textContent = fmt(t); }
+  $("tLeft").textContent = "-"+fmt(Math.max(0,(d-t))/(S.speed||1));
+  syncTranscript(t);
+  if(Date.now()-lastSaved > 5000) savePos();
+}
+function savePos(now){
+  if(!cur || !media.src || endSkipped) return; lastSaved = Date.now();
+  var t = media.currentTime||0; if(t>5) S.pos[cur.g] = Math.floor(t);
+  if(media.duration && isFinite(media.duration)) S.pos[cur.g+"#len"] = Math.floor(media.duration);
+  save(now);
+}
+function finishEpisode(){
+  if(!cur) return;
+  S.played[cur.g] = true; delete S.pos[cur.g]; save(true); setPlayIcons();
+  if(sleepEnd===-1){ sleepEnd = 0; $("sleepSel").value="0"; $("sleepLeft").textContent=""; }
+  if(route.show) render();
+}
+[audio, video].forEach(function(m){
+  m.addEventListener("timeupdate", function(){ if(m===media) onTime(); });
+  m.addEventListener("play", function(){ if(m===media){ setPlayIcons(); updatePositionState(); } });
+  m.addEventListener("pause", function(){ if(m===media){ setPlayIcons(); savePos(true); } });
+  m.addEventListener("loadedmetadata", function(){ if(m===media){ onTime(); updatePositionState(); } });
+  m.addEventListener("seeked", function(){ if(m===media){ updatePositionState(); if(media.duration && media.currentTime < media.duration - ((showOf(cur&&cur.s).skipEnd)||0) - 1) endSkipped = false; } });
+  m.addEventListener("ended", function(){ if(m===media && !endSkipped) finishEpisode(); });
+  m.addEventListener("error", function(){ if(m===media && m.getAttribute("src")) toast("This episode wouldn't play. The show's server may be down."); });
+});
+document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="hidden") savePos(true); });
+window.addEventListener("pagehide", function(){ savePos(true); });
+
+function setMediaSession(){
+  if(!("mediaSession" in navigator) || !cur) return;
+  try{
+    navigator.mediaSession.metadata = new MediaMetadata({title:cur.t, artist:cur.show||"", album:cur.show||"", artwork: cur.a? [{src:cur.a, sizes:"600x600", type:"image/jpeg"}] : []});
+    var ms = navigator.mediaSession;
+    var set = function(a,f){ try{ ms.setActionHandler(a,f); }catch(e){} };
+    set("play", function(){ media.play(); }); set("pause", function(){ media.pause(); });
+    set("seekbackward", function(d){ skip(-((d&&d.seekOffset)||S.skipBack)); }); set("seekforward", function(d){ skip((d&&d.seekOffset)||S.skipFwd); });
+    set("seekto", function(d){ if(d && d.seekTime!=null) try{ media.currentTime = d.seekTime; }catch(e){} updatePositionState(); });
+    set("previoustrack", null); set("nexttrack", null);
+  }catch(e){}
+}
+function updatePositionState(){
+  if(!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
+  var d = media.duration; if(!d || !isFinite(d)) return;
+  try{ navigator.mediaSession.setPositionState({duration:d, playbackRate:media.playbackRate||1, position:Math.min(d, media.currentTime||0)}); }catch(e){}
+}
+
+/* ---------- Transcripts (Podcasting 2.0 podcast:transcript) ---------- */
+var cues = [], cueEls = [], cueIdx = -1, txFor = "";
+function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; $("txBox").innerHTML = ""; }
+$("txBtn").onclick = function(){
+  var on = !$("player").classList.contains("tx");
+  $("player").classList.toggle("tx", on); this.setAttribute("aria-pressed", String(on)); this.classList.toggle("on", on);
+  if(on && cur && txFor!==cur.g) loadTranscript(cur);
+};
+function txMsg(text, link){
+  var box = $("txBox"); box.innerHTML = "";
+  var p = el("p",{class:"tx-msg", text:text}); if(link){ p.appendChild(document.createTextNode(" ")); p.appendChild(el("a",{href:link, target:"_blank", rel:"noopener", text:"Open the transcript in Safari"})); }
+  box.appendChild(p);
+}
+function findTranscripts(c){
+  if(c.tr && c.tr.length) return Promise.resolve(c.tr);
+  var sh = showOf(c.s); if(!sh.feedUrl) return Promise.resolve([]);
+  return fetch(sh.feedUrl).then(function(r){ if(!r.ok) throw 0; return r.text(); }).then(function(txt){
+    var items = rssItems(new DOMParser().parseFromString(txt, "application/xml"), c.s);
+    var hit = items.filter(function(i){ return i.g===c.g || normUrl(i.u)===normUrl(c.u); })[0];
+    if(hit && hit.ch && !c.ch){ c.ch = hit.ch; loadChapters(c); }
+    return hit ? hit.tr : [];
+  }).catch(function(){ return null; });
+}
+function loadTranscript(c){
+  txFor = c.g; txMsg("Looking for a transcript…");
+  findTranscripts(c).then(function(list){
+    if(!cur || cur.g!==c.g) return;
+    if(list===null){ txMsg("Couldn't check this show's feed for a transcript. Adding your Podcast Index key in Settings helps find them."); return; }
+    if(!list.length){ txMsg("This episode doesn't come with a transcript. Transcripts show up here when a show publishes one."); return; }
+    var rank = function(t){ var s=(t.type||"")+" "+t.url; return /json/i.test(s)?0 : /vtt/i.test(s)?1 : /srt|subrip/i.test(s)?2 : /html/i.test(s)?3 : 4; };
+    var pick = list.slice().sort(function(a,b){return rank(a)-rank(b);})[0];
+    return fetch(pick.url).then(function(r){ if(!r.ok) throw 0; return r.text(); }).then(function(txt){
+      if(!cur || cur.g!==c.g) return;
+      cues = parseTranscript(txt, pick);
+      if(!cues.length){ txMsg("The transcript file was empty or in a format this app can't read.", pick.url); return; }
+      drawTranscript();
+    }).catch(function(){ txMsg("This show has a transcript, but its server won't let the app load it.", pick.url); });
+  });
+}
+function tsec(s){ var p = String(s).trim().replace(",",".").split(":").map(parseFloat); return p.reduce(function(a,b){return a*60+b;},0); }
+function parseTranscript(txt, info){
+  var t = txt.trim();
+  if(/json/i.test(info.type||"") || t.charAt(0)==="{"){
+    try{ var j = JSON.parse(t); return (j.segments||[]).map(function(s){ return {s:+s.startTime||0, e:+s.endTime||0, w:s.speaker||"", b:String(s.body||"").trim()}; }).filter(function(c){return c.b;}); }catch(e){}
+  }
+  if(/-->/.test(t)){
+    var out = [];
+    t.replace(/\r/g,"").split(/\n\n+/).forEach(function(block){
+      var lines = block.split("\n"); var k = 0; while(k<lines.length && lines[k].indexOf("-->")<0) k++;
+      if(k>=lines.length) return;
+      var m = lines[k].split("-->"); var body = lines.slice(k+1).join(" ");
+      var who = ""; var v = body.match(/^<v\s+([^>]+)>/); if(v) who = v[1];
+      body = body.replace(/<[^>]+>/g,"").trim(); if(!body) return;
+      var sp = body.match(/^([A-Z][\w .'-]{1,30}):\s+(.*)$/); if(!who && sp){ who = sp[1]; body = sp[2]; }
+      out.push({s:tsec(m[0]), e:tsec(m[1].trim().split(/\s/)[0]), w:who, b:body});
+    });
+    var merged = [];
+    out.forEach(function(c){ var last = merged[merged.length-1]; if(last && last.w===c.w && (last.b.length < 160)){ last.b += " "+c.b; last.e = c.e; } else merged.push(c); });
+    return merged;
+  }
+  var text = /<[a-z][\s\S]*>/i.test(t) ? plain(t) : t;
+  return text.split(/\n\s*\n|\n/).map(function(p){return p.trim();}).filter(Boolean).map(function(p){ return {s:-1, e:-1, w:"", b:p}; });
+}
+function drawTranscript(){
+  var box = $("txBox"); box.innerHTML = ""; cueEls = []; cueIdx = -1;
+  var timed = cues.some(function(c){return c.s>=0;});
+  if(!timed) box.appendChild(el("p",{class:"tx-msg", text:"This transcript has no timings, so it won't follow along."}));
+  cues.forEach(function(c){
+    var b = el(timed?"button":"p",{class:"cue", onclick: timed? function(){ try{ media.currentTime = c.s; }catch(e){} if(media.paused) media.play().catch(function(){}); } : null},[ c.w? el("span",{class:"who", text:c.w}) : null, c.b ]);
+    cueEls.push(b); box.appendChild(b);
+  });
+  syncTranscript(media.currentTime||0);
+}
+function syncTranscript(t){
+  if(!cues.length || !$("player").classList.contains("tx") || cues[0].s<0) return;
+  var i = cueIdx; if(i<0 || t < cues[i].s || (cues[i+1] && t >= cues[i+1].s)){
+    i = -1; for(var k=0;k<cues.length;k++){ if(cues[k].s <= t) i = k; else break; }
+  }
+  if(i===cueIdx) return;
+  if(cueEls[cueIdx]) cueEls[cueIdx].classList.remove("now");
+  cueIdx = i;
+  if(cueEls[i]){ cueEls[i].classList.add("now"); var box = $("txBox"), e = cueEls[i]; box.scrollTo({top: e.offsetTop - box.clientHeight/3, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); }
+}
+
+/* ---------- start ---------- */
+applySkipLabels();
+if(S.now && S.now.u){ playEp(S.now, false); }
+render();
+if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(function(){});
+window.__pp = {S:S, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed};
+})();
+</script>
+</body>
+</html>
