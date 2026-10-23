@@ -755,9 +755,9 @@ function drawSugg(body, subj, entry){
   body.appendChild(el("p",{class:"note", style:"margin-top:6px;font-size:12px", text:"From "+(entry.src.join(" and ")||"the podcast directory")+", "+fmtDate(new Date(entry.at).toISOString())+"."}));
 }
 function suggRow(sh, subj, body, entry){
-  var bits = [sh.author, sh.genre].filter(Boolean).join(" · ");
-  var a = el("div",{class:"a", text:bits});
-  if(sh.last){ var days = (Date.now()-new Date(sh.last))/864e5; if(days < 45) a.appendChild(el("span",{class:"new", text:(bits?" · ":"")+"new "+fmtDate(sh.last)})); }
+  var a = el("div",{class:"a"});
+  if(sh.last && (Date.now()-new Date(sh.last))/864e5 < 45) a.appendChild(el("span",{class:"new", text:"New "+fmtDate(sh.last)+" · "}));
+  a.appendChild(document.createTextNode([sh.genre, sh.author].filter(Boolean).join(" · ")));
   return el("li",{class:"show-row"},[
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
     el("button",{class:"row-link", onclick:function(){ var t = {}; for(var x in sh) t[x] = sh[x]; t.sugCat = subj; go({tab:"suggest", show:sh.id, temp:t, fresh:true}); }},[
