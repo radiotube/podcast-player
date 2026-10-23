@@ -37,7 +37,7 @@ button{cursor:pointer}
 img{max-width:100%;display:block}
 
 .app{display:flex;flex-direction:column;height:100%}
-.topbar{flex:0 0 auto;padding-top:calc(var(--sat) + 10px);padding-bottom:10px;padding-left:max(16px,var(--sal));padding-right:max(16px,var(--sar));display:flex;align-items:center;gap:10px;background:var(--bg);border-bottom:1px solid transparent}
+.topbar{flex:0 0 auto;padding-top:calc(var(--sat) + 10px);padding-bottom:10px;padding-left:max(16px,var(--sal),calc((100% - 760px)/2));padding-right:max(16px,var(--sar),calc((100% - 760px)/2));display:flex;align-items:center;gap:10px;background:var(--bg);border-bottom:1px solid transparent}
 .topbar.scrolled{border-bottom-color:var(--line)}
 .topbar h1{font:700 30px/1.1 var(--display);letter-spacing:-.01em;margin:0;flex:1;min-width:0;text-wrap:balance}
 .topbar .back{display:flex;align-items:center;gap:4px;background:none;border:0;color:var(--accent);font-size:17px;padding:8px 4px;margin-left:-4px}
@@ -489,12 +489,13 @@ function renderHome(top, view){
   view.appendChild(oSec);
 }
 function favRow(sh, i){
-  var latest = el("div",{class:"latest", text:"Loading latest episode…"});
+  var cached = S.cache[sh.id] && S.cache[sh.id].eps[0];
+  var latest = el("div",{class:"latest", text: arranging ? (cached? cached.t : (sh.author||"")) : "Loading latest episode…"});
   var play = el("button",{class:"play-btn", "aria-label":"Play latest episode of "+sh.title, html:ICON.play, disabled:true});
   var li = el("li",{class:"fav", "data-id":sh.id},[
     el("span",{class:"rank", text:String(i+1)}),
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
-    el("div",{class:"meta"},[ sh.cat? el("div",{class:"subj", text:sh.cat}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id}); }}), latest ]),
+    el("div",{class:"meta"},[ sh.cat? el("div",{class:"subj", text:sh.cat}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id, fresh:true}); }}), latest ]),
     play,
     el("div",{class:"arrange-tools"},[
       el("button",{class:"icon-btn", "aria-label":"Move "+sh.title+" up", html:ICON.up, disabled:i===0, onclick:function(){ moveFav(i,i-1); }}),
@@ -547,7 +548,7 @@ function showRow(sh){
   var subbed = !!S.subs[sh.id];
   return el("li",{class:"show-row"},[
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
-    el("button",{class:"row-link", onclick:function(){ go({tab:route.tab, show:sh.id, temp:subbed?null:sh}); }},[
+    el("button",{class:"row-link", onclick:function(){ go({tab:route.tab, show:sh.id, temp:subbed?null:sh, fresh:true}); }},[
       el("div",{class:"t", text:sh.title}), el("div",{class:"a", text:(sh.author||"")+(sh.medium==="video"?" · Video":"")})
     ]),
     starBtn(sh)
@@ -583,12 +584,17 @@ function renderShow(top, view, id){
   if(subbed) view.appendChild(showSettings(sh));
   var listWrap = el("section",null,[ el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"}) ]);
   view.appendChild(listWrap);
-  episodesFor(sh, true).then(function(eps){
+  var fresh = !!route.fresh; route.fresh = false;
+  episodesFor(sh, fresh).then(function(eps){
     listWrap.innerHTML = "";
     if(!eps.length){ listWrap.appendChild(el("p",{class:"empty", text:"No episodes found for this show."})); return; }
     var n = eps.filter(function(e){return e.v;}).length;
     listWrap.appendChild(el("h2",{class:"section-label", text:eps.length+" recent episodes"+(n? " · "+n+" video":"")}));
-    var ul = el("ul",{class:"eps"}); eps.forEach(function(e){ ul.appendChild(epRow(e, sh)); }); listWrap.appendChild(ul);
+    var ul = el("ul",{class:"eps"}); listWrap.appendChild(ul);
+    var shown = 0;
+    var more = el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show more episodes", onclick:function(){ addEps(20); }});
+    function addEps(n){ eps.slice(shown, shown+n).forEach(function(e){ ul.appendChild(epRow(e, sh)); }); shown += n; more.hidden = shown >= eps.length; }
+    listWrap.appendChild(more); addEps(20);
   }, function(){
     listWrap.innerHTML = "";
     listWrap.appendChild(el("p",{class:"empty", text: sh.itunesId || hasPI() ? "Couldn't reach the podcast directory. Check your connection and try again." : "This show isn't in Apple's directory and its feed doesn't let web apps read it. Adding your Podcast Index key in Settings may fix that."}));
