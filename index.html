@@ -168,6 +168,10 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .chip{flex:0 0 auto;border:1px solid var(--line);background:transparent;border-radius:999px;padding:8px 14px;font-size:15px;font-weight:600;color:var(--muted);min-height:40px}
 .chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
 .fav .subj{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.sugg-acts{display:flex;align-items:center;gap:6px}
+.sugg-acts .pill-btn{padding:8px 12px}
+.icon-btn.plain{background:none;color:var(--muted);width:36px}
+.show-row .a .new{color:var(--good)}
 .group-label{font-size:15px;font-weight:650;margin:14px 0 2px;color:var(--fg)}
 .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
 .field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600;min-width:0}
@@ -202,6 +206,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
   </div>
   <nav class="tabs" aria-label="Sections">
     <button data-tab="home" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>Shows</button>
+    <button data-tab="suggest"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.1V16h5v-.1c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3z"/></svg>Suggested</button>
     <button data-tab="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Search</button>
     <button data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--bg)"/><circle cx="15" cy="12" r="2" fill="var(--bg)"/><circle cx="8" cy="18" r="2" fill="var(--bg)"/></svg>Settings</button>
   </nav>
@@ -255,13 +260,14 @@ var ICON = {
   grip:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
   star:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
   starOn:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   chev:'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>'
 };
 var SKIP_EDGE = [0,10,15,20,30,45,60,90,120,180];
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}};}
 var S = load();
 function load(){
   var s = null;
@@ -332,9 +338,10 @@ function jsonp(url){
 }
 function appleSearch(term, limit){
   return jsonp("https://itunes.apple.com/search?media=podcast&entity=podcast&limit="+(limit||25)+"&term="+encodeURIComponent(term))
-    .then(function(d){ return (d.results||[]).filter(function(r){return r.collectionId;}).map(function(r){
-      return {id:"it:"+r.collectionId, itunesId:r.collectionId, title:r.collectionName||r.trackName, author:r.artistName||"", feedUrl:r.feedUrl||"", art:bigArt(r.artworkUrl600||r.artworkUrl100||""), src:"Apple"};
-    }); });
+    .then(function(d){ return (d.results||[]).filter(function(r){return r.collectionId;}).map(appleShow); });
+}
+function appleShow(r){
+  return {id:"it:"+r.collectionId, itunesId:r.collectionId, title:r.collectionName||r.trackName, author:r.artistName||"", feedUrl:r.feedUrl||"", art:bigArt(r.artworkUrl600||r.artworkUrl100||""), src:"Apple"};
 }
 
 /* Podcast Index, with the key and secret Kevin saves on this device. */
@@ -436,6 +443,7 @@ function render(){
   var top = $("topbar"), view = $("view"); top.innerHTML = ""; view.innerHTML = "";
   view.classList.toggle("arranging", arranging && !route.show && route.tab==="home");
   if(route.show) return renderShow(top, view, route.show);
+  if(route.tab==="suggest") return renderSuggest(top, view);
   if(route.tab==="search") return renderSearch(top, view);
   if(route.tab==="settings") return renderSettings(top, view);
   renderHome(top, view);
@@ -562,8 +570,15 @@ function starBtn(sh){
 function toggleFav(sh){
   var i = S.fav.indexOf(sh.id);
   if(i>=0){ S.fav.splice(i,1); toast("Removed from favorites"); }
-  else { S.subs[sh.id] = S.subs[sh.id] || sh; S.fav.push(sh.id); toast("Added to favorites at #"+S.fav.length); }
+  else { if(!S.subs[sh.id]) adopt(sh); S.fav.push(sh.id); toast("Added to favorites at #"+S.fav.length); }
   save();
+}
+
+/* A show from search or Suggested becomes a subscription; a suggestion brings its subject along. */
+function adopt(sh){
+  if(sh.sugCat && !sh.cat) sh.cat = sh.sugCat;
+  delete sh.sugCat; delete sh.genre; delete sh.last; delete sh.n;
+  S.subs[sh.id] = sh; return sh;
 }
 
 /* ---------- Show page ---------- */
@@ -579,7 +594,7 @@ function renderShow(top, view, id){
   var actions = el("div",{class:"show-actions"},[
     el("button",{class:"pill-btn"+(fav?" on":""), text:fav?"★ Favorite":"☆ Favorite", onclick:function(){ toggleFav(sh); render(); }}),
     subbed ? el("button",{class:"pill-btn", text:"Unfollow", onclick:function(){ unfollow(sh); }})
-           : el("button",{class:"pill-btn", text:"Follow", onclick:function(){ S.subs[sh.id]=sh; save(); toast("Following "+sh.title); render(); }})
+           : el("button",{class:"pill-btn", text:"Follow", onclick:function(){ adopt(sh); save(); toast("Following "+sh.title+(sh.cat?" under "+sh.cat:"")); render(); }})
   ]);
   view.appendChild(el("div",{class:"show-head"},[ el("img",{src:sh.art||"", alt:""}), el("div",null,[ el("h2",{text:sh.title}), el("p",{class:"a", text:sh.author||""}), actions ]) ]));
   if(subbed) view.appendChild(showSettings(sh));
@@ -648,6 +663,113 @@ function epRow(e, sh){
   ]);
   if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
   return li;
+}
+
+/* ---------- Suggested: new shows for each subject, Podcast Index first, Apple Podcasts second ---------- */
+var SUGG_TTL = 3*24*3600*1000, SUGG_PAGE = 8, SUGG_FRESH = 365*24*3600*1000;
+var suggBusy = {}, suggShown = {}, suggForce = false, suggFilter = "";
+function followedKeys(){
+  var k = {};
+  Object.keys(S.subs).forEach(function(id){ var s = S.subs[id];
+    k[id] = 1; if(s.itunesId) k["it:"+s.itunesId] = 1; if(s.piId) k["pi:"+s.piId] = 1;
+    if(s.feedUrl) k["u:"+normUrl(s.feedUrl)] = 1; k["t:"+String(s.title||"").toLowerCase().trim()] = 1; });
+  return k;
+}
+function keysOf(sh){
+  return [sh.id, sh.itunesId&&"it:"+sh.itunesId, sh.piId&&"pi:"+sh.piId, sh.feedUrl&&"u:"+normUrl(sh.feedUrl), "t:"+String(sh.title||"").toLowerCase().trim()].filter(Boolean);
+}
+function suggApple(subj){
+  return jsonp("https://itunes.apple.com/search?media=podcast&entity=podcast&limit=50&term="+encodeURIComponent(subj)).then(function(d){
+    return (d.results||[]).filter(function(r){ return r.collectionId && (!r.releaseDate || Date.now()-new Date(r.releaseDate) < SUGG_FRESH); }).map(function(r){
+      var sh = appleShow(r); sh.genre = r.primaryGenreName||""; sh.last = r.releaseDate||""; sh.n = r.trackCount||0; return sh;
+    });
+  });
+}
+function suggPI(subj){
+  return pi("search/byterm", {q:subj, max:60}).then(function(d){
+    return (d.feeds||[]).filter(function(f){
+      var last = (f.newestItemPubdate||f.lastUpdateTime||0)*1000;
+      return !f.dead && (f.episodeCount||0) >= 3 && (!f.language || /^en/i.test(f.language)) && (!last || Date.now()-last < SUGG_FRESH);
+    }).map(function(f){
+      var sh = fromPIFeed(f); var cats = f.categories ? Object.keys(f.categories).map(function(k){return f.categories[k];}) : [];
+      sh.genre = cats[0]||""; sh.last = f.newestItemPubdate? new Date(f.newestItemPubdate*1000).toISOString() : ""; sh.n = f.episodeCount||0; return sh;
+    });
+  });
+}
+function suggestFor(subj, force){
+  var c = S.sugg[subj];
+  if(!force && c && Date.now()-c.at < SUGG_TTL) return Promise.resolve(c);
+  if(suggBusy[subj]) return suggBusy[subj];
+  var src = [];
+  var first = hasPI() ? suggPI(subj).then(function(l){ src.push("Podcast Index"); return l; }, function(){ return []; }) : Promise.resolve([]);
+  var p = first.then(function(list){
+    if(list.length >= 20) return list;
+    return suggApple(subj).then(function(more){ src.push("Apple Podcasts"); return list.concat(more); }, function(e){ if(list.length) return list; throw e; });
+  }).then(function(list){
+    var seen = {}, out = [];
+    list.forEach(function(sh){ var ks = keysOf(sh); if(ks.some(function(k){return seen[k];})) return; ks.forEach(function(k){ seen[k] = 1; }); out.push(sh); });
+    var entry = {at:Date.now(), src:src, list:out.slice(0,40)};
+    S.sugg[subj] = entry; save(); delete suggBusy[subj]; return entry;
+  }, function(err){ delete suggBusy[subj]; if(c) return c; throw err; });
+  suggBusy[subj] = p; return p;
+}
+function renderSuggest(top, view){
+  top.appendChild(el("h1",{text:"Suggested"}));
+  var subs = subjects();
+  Object.keys(S.sugg).forEach(function(k){ if(subs.indexOf(k)<0) delete S.sugg[k]; });
+  if(!subs.length){
+    view.appendChild(el("p",{class:"empty", text:"Suggestions follow your subjects. Open a show you follow, pick a Subject for it, and new shows for that subject will show up here."}));
+    return;
+  }
+  var force = suggForce; suggForce = false;
+  top.appendChild(el("button",{class:"pill-btn", text:"Refresh", onclick:function(){ suggForce = true; suggShown = {}; render(); }}));
+  if(suggFilter && subs.indexOf(suggFilter)<0) suggFilter = "";
+  if(subs.length > 1){
+    var chips = el("div",{class:"chips", role:"group", "aria-label":"Pick a subject"});
+    [""].concat(subs).forEach(function(c){ chips.appendChild(el("button",{class:"chip", "aria-pressed":String(suggFilter===c), text:c||"All", onclick:function(){ suggFilter = c; render(); }})); });
+    view.appendChild(chips);
+  }
+  view.appendChild(el("p",{class:"note", text:"New shows that match each of your subjects. Shows you already follow are left out. Follow adds the show under that subject. Tap a show's name to hear an episode first."}));
+  subs.forEach(function(c){
+    if(suggFilter && suggFilter!==c) return;
+    var body = el("div",null,[ el("div",{class:"spinner", role:"status", "aria-label":"Finding shows for "+c}) ]);
+    view.appendChild(el("section",null,[ el("h2",{class:"section-label", text:c}), body ]));
+    suggestFor(c, force).then(function(entry){ drawSugg(body, c, entry); }, function(){
+      body.innerHTML = ""; body.appendChild(el("p",{class:"status err", text:"Couldn't reach the podcast directory. Check your connection and tap Refresh."}));
+    });
+  });
+}
+function drawSugg(body, subj, entry){
+  body.innerHTML = "";
+  var k = followedKeys();
+  var list = entry.list.filter(function(sh){ return !S.hideSugg[sh.id] && !keysOf(sh).some(function(x){return k[x];}); });
+  if(!list.length){
+    body.appendChild(el("p",{class:"note", text:"No new shows found for “"+subj+"”. A broader subject name usually finds more."}));
+    return;
+  }
+  var n = suggShown[subj] || SUGG_PAGE;
+  var ul = el("ul",{class:"show-list"});
+  list.slice(0, n).forEach(function(sh){ ul.appendChild(suggRow(sh, subj, body, entry)); });
+  body.appendChild(ul);
+  if(list.length > n) body.appendChild(el("button",{class:"btn secondary", style:"margin-top:8px", text:"Show more for "+subj, onclick:function(){ suggShown[subj] = n + SUGG_PAGE; drawSugg(body, subj, entry); }}));
+  body.appendChild(el("p",{class:"note", style:"margin-top:6px;font-size:12px", text:"From "+(entry.src.join(" and ")||"the podcast directory")+", "+fmtDate(new Date(entry.at).toISOString())+"."}));
+}
+function suggRow(sh, subj, body, entry){
+  var bits = [sh.author, sh.genre].filter(Boolean).join(" · ");
+  var a = el("div",{class:"a", text:bits});
+  if(sh.last){ var days = (Date.now()-new Date(sh.last))/864e5; if(days < 45) a.appendChild(el("span",{class:"new", text:(bits?" · ":"")+"new "+fmtDate(sh.last)})); }
+  return el("li",{class:"show-row"},[
+    el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
+    el("button",{class:"row-link", onclick:function(){ var t = {}; for(var x in sh) t[x] = sh[x]; t.sugCat = subj; go({tab:"suggest", show:sh.id, temp:t, fresh:true}); }},[
+      el("div",{class:"t", text:sh.title}), a
+    ]),
+    el("div",{class:"sugg-acts"},[
+      el("button",{class:"pill-btn", "aria-label":"Follow "+sh.title+" under "+subj, text:"Follow", onclick:function(){
+        var t = {}; for(var x in sh) t[x] = sh[x]; t.sugCat = subj; adopt(t); save(); toast("Following "+t.title+" under "+subj); drawSugg(body, subj, entry);
+      }}),
+      el("button",{class:"icon-btn plain", "aria-label":"Not interested in "+sh.title, html:ICON.x, onclick:function(){ S.hideSugg[sh.id] = 1; save(); toast("Won't suggest "+sh.title+" again"); drawSugg(body, subj, entry); }})
+    ])
+  ]);
 }
 
 /* ---------- Search: Podcast Index first, Apple Podcasts second ---------- */
