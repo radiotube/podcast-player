@@ -842,7 +842,9 @@ function playEp(e, autoplay){
     if(target>0 && (!media.duration || target < media.duration-10)) try{ media.currentTime = target; }catch(x){}
     media.playbackRate = S.speed||1;
   });
+  $("seek").value = 0; $("tCur").textContent = "0:00"; $("tLeft").textContent = cur.len ? "-"+fmt(cur.len) : "-0:00";
   if(cur.ch) loadChapters(cur);
+  if($("player").classList.contains("tx")) loadTranscript(cur);
   fillNowPlaying();
   if(autoplay){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); openPlayer(); }
   setMediaSession();
