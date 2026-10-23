@@ -7,7 +7,7 @@ var U = "https://static1.squarespace.com/static/58b08985be65947bf171e05e/t/6ada5
 var out = document.getElementById("out"), lines = [];
 function log(s){ lines.push(s); out.textContent = lines.join("\n"); }
 function hex(b, n){ var s=[]; for(var i=0;i<Math.min(n,b.length);i++) s.push(("0"+b[i].toString(16)).slice(-2)); return s.join(" "); }
-fetch(U, {headers:{Range:"bytes=0-131071"}}).then(function(r){
+fetch(U).then(function(r){
   log("status " + r.status);
   ["content-range","content-length","content-type","accept-ranges"].forEach(function(h){ log(h+": "+r.headers.get(h)); });
   return r.arrayBuffer();
