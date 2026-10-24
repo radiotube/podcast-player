@@ -896,6 +896,8 @@ function renderSettings(top, view){
     el("p",{text:"Each show also has its own Skip at start and Skip at end setting on its page."})
   ]));
 
+  view.appendChild(syncCard());
+
   var piStatus = el("p",{class:"status", id:"piStatus", "aria-live":"polite", text: hasPI()? "Key saved on this device." : ""});
   var keyInp = el("input",{id:"piKey", type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", value:S.pi.key||"", placeholder:"API key"});
   var secInp = el("input",{id:"piSecret", type:"password", autocomplete:"off", value:S.pi.secret||"", placeholder:"API secret"});
@@ -928,8 +930,6 @@ function renderSettings(top, view){
     el("div",{class:"btn-row"},[ el("button",{class:"btn", text:"Import OPML file", onclick:function(){ file.click(); }}) ]),
     file, status
   ]));
-
-  view.appendChild(syncCard());
 
   var rfile = el("input",{type:"file", id:"restore", accept:".json,application/json", hidden:true, onchange:function(){ if(this.files[0]) restore(this.files[0]); this.value=""; }});
   view.appendChild(el("div",{class:"card"},[
@@ -1451,7 +1451,7 @@ function mergeSync(base, local, remote, fresh){
   out.fav = order.filter(function(id){ if(seen[id] || dropped[id] || !out.subs[id]) return false; seen[id] = 1; return true; });
 
   // Listening spots: the newer one wins for each episode, including a spot cleared because it finished.
-  var eps = {}; [L.posT, R.posT, L.pos, R.pos].forEach(function(o){ Object.keys(o).forEach(function(g){ if(!/#len$/.test(g)) eps[g] = 1; }); });
+  var eps = {}; [L.posT, R.posT, L.pos, R.pos].forEach(function(o){ Object.keys(o).forEach(function(g){ eps[g.replace(/#len$/,"")] = 1; }); });
   Object.keys(eps).forEach(function(g){
     var lt = L.posT[g]||0, rt = R.posT[g]||0, src = rt > lt ? R : L;
     if(rt===lt && L.pos[g]==null) src = R;
@@ -1477,8 +1477,9 @@ function applyMerged(m){
   var prefsBefore = stable(snap().prefs);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg;
   ["speed","skipBack","skipFwd","adSkip"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
-  if(m.nowT > (S.nowT||0) && m.now && m.now.u && idle){
+  if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){
     S.nowT = m.nowT;
     if(!cur || cur.g!==m.now.g){ S.now = m.now; playEp(m.now, false); }
   }
