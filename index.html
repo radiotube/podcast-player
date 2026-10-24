@@ -267,7 +267,7 @@ var SKIP_EDGE = [0,10,15,20,30,45,60,90,120,180];
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0};}
 var S = load();
 function load(){
   var s = null;
@@ -279,9 +279,9 @@ function load(){
   return s;
 }
 var saveT = null;
-function save(now){
+function save(now, quiet){
   clearTimeout(saveT);
-  var go = function(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ S.cache = {}; try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e2){} } };
+  var go = function(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ S.cache = {}; try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e2){} } if(!quiet) syncCheck(); };
   if(now) go(); else saveT = setTimeout(go, 300);
 }
 
@@ -861,10 +861,12 @@ function renderSettings(top, view){
     file, status
   ]));
 
+  view.appendChild(syncCard());
+
   var rfile = el("input",{type:"file", id:"restore", accept:".json,application/json", hidden:true, onchange:function(){ if(this.files[0]) restore(this.files[0]); this.value=""; }});
   view.appendChild(el("div",{class:"card"},[
-    el("h3",{text:"Backup, and moving between iPhone and iPad"}),
-    el("p",{text:"Your shows, subjects, favorites order and listening spots are kept on this device only. Save a backup here, then restore it on your other device (AirDrop or iCloud Drive works)."}),
+    el("h3",{text:"Backup"}),
+    el("p",{text: dbx ? "Dropbox keeps your devices in step. A backup file is still handy as a snapshot you can go back to." : "Without Dropbox sync, your shows, subjects, favorites order and listening spots are kept on this device only. Save a backup here, then restore it on your other device (AirDrop or iCloud Drive works)."}),
     el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Save backup", onclick:backup}), el("button",{class:"btn secondary", text:"Restore backup", onclick:function(){ rfile.click(); }}) ]),
     rfile
   ]));
@@ -926,6 +928,7 @@ function restore(f){
   f.text().then(function(t){
     var d = JSON.parse(t); if(!d || d.app!=="podcast-player") throw new Error("bad");
     S.subs = d.subs||{}; S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
+    S.posT = {}; Object.keys(S.pos).forEach(function(g){ if(!/#len$/.test(g)) S.posT[g] = Date.now(); });
     if(d.skipBack) S.skipBack = d.skipBack; if(d.skipFwd) S.skipFwd = d.skipFwd; if(typeof d.adSkip==="boolean") S.adSkip = d.adSkip; S.cache = {};
     save(true); applySkipLabels(); toast("Backup restored"); go({tab:"home"});
   }).catch(function(){ toast("That isn't a Podcast Player backup file"); });
@@ -933,7 +936,7 @@ function restore(f){
 
 /* ---------- Player ---------- */
 var audio = $("audio"), video = $("video"), media = audio, cur = null, sleepEnd = 0, sleepTimer = null, lastSaved = 0;
-var ads = [], endSkipped = false;
+var ads = [], endSkipped = false, posDirty = false, progSeek = false;
 function applySkipLabels(){
   $("backLbl").textContent = S.skipBack; $("fwdLbl").textContent = S.skipFwd;
   $("back15").setAttribute("aria-label","Back "+S.skipBack+" seconds"); $("fwd30").setAttribute("aria-label","Forward "+S.skipFwd+" seconds");
@@ -951,7 +954,7 @@ function playEp(e, autoplay){
   if(cur && cur.g===e.g){ if(autoplay){ media.play().catch(function(){}); } openPlayer(); return; }
   savePos(true);
   cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||"", f:showObj.feedUrl||""};
-  S.now = cur; save();
+  S.now = cur; if(autoplay) S.nowT = Date.now(); save();
   ads = []; endSkipped = false; badLen = false; $("seek").disabled = false; resetTranscript();
   var useVideo = e.v || isVideo(e.ty, e.u);
   var other = useVideo ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
@@ -959,13 +962,13 @@ function playEp(e, autoplay){
   if(useVideo) video.poster = cur.a || "";
   showVideo(useVideo);
   media.src = e.u; media.playbackRate = S.speed||1; media.defaultPlaybackRate = S.speed||1;
-  var start = S.pos[e.g]||0, intro = showObj.skipStart||0;
+  var intro = showObj.skipStart||0;
   media.addEventListener("loadedmetadata", function once(){
     media.removeEventListener("loadedmetadata", once);
-    var target = start>5 ? start : 0;
+    var start = S.pos[e.g]||0, target = start>5 ? start : 0;
     var d = dur();
     if(intro && target < intro && (!d || intro < d-30)){ target = intro; if(autoplay) toast("Skipped the first "+fmtSecs(intro)); }
-    if(target>0 && (!d || target < d-10)) try{ media.currentTime = target; }catch(x){}
+    if(target>0 && (!d || target < d-10)){ progSeek = true; try{ media.currentTime = target; }catch(x){ progSeek = false; } }
     media.playbackRate = S.speed||1;
   });
   $("seek").value = 0; $("tCur").textContent = "0:00"; $("tLeft").textContent = cur.len ? "-"+fmt(cur.len) : "-0:00";
@@ -1063,27 +1066,29 @@ function onTime(){
   if(!seeking){ $("seek").value = d? Math.round(t/d*1000) : 0; $("tCur").textContent = fmt(t); }
   $("tLeft").textContent = d ? "-"+fmt(Math.max(0,(d-t))/(S.speed||1)) : "";
   syncTranscript(t);
+  if(!media.paused) posDirty = true;
   if(Date.now()-lastSaved > 5000) savePos();
 }
+/* Only a spot the listener reached here is saved, so a paused episode never overwrites a newer spot from another device. */
 function savePos(now){
   if(!cur || !media.src || endSkipped) return; lastSaved = Date.now();
-  var t = media.currentTime||0; if(t>5) S.pos[cur.g] = Math.floor(t);
   var d = dur(); if(d) S.pos[cur.g+"#len"] = Math.floor(d);
-  save(now);
+  if(posDirty){ posDirty = false; var t = media.currentTime||0; if(t>5){ S.pos[cur.g] = Math.floor(t); S.posT[cur.g] = Date.now(); } }
+  save(now, true);
 }
 function finishEpisode(){
   if(!cur) return;
-  S.played[cur.g] = true; delete S.pos[cur.g]; save(true); setPlayIcons();
+  S.played[cur.g] = Date.now(); delete S.pos[cur.g]; S.posT[cur.g] = Date.now(); posDirty = false; save(true); setPlayIcons();
   if(sleepEnd===-1){ sleepEnd = 0; $("sleepSel").value="0"; $("sleepLeft").textContent=""; }
   if(route.show) render();
 }
 [audio, video].forEach(function(m){
   m.addEventListener("timeupdate", function(){ if(m===media) onTime(); });
-  m.addEventListener("play", function(){ if(m===media){ setPlayIcons(); updatePositionState(); } });
-  m.addEventListener("pause", function(){ if(m===media){ setPlayIcons(); savePos(true); } });
+  m.addEventListener("play", function(){ if(m===media){ setPlayIcons(); updatePositionState(); if(cur){ S.now = cur; S.nowT = Date.now(); save(); } } });
+  m.addEventListener("pause", function(){ if(m===media){ setPlayIcons(); savePos(true); syncSoon(1500); } });
   m.addEventListener("loadedmetadata", function(){ if(m===media){ onTime(); updatePositionState(); } });
   m.addEventListener("durationchange", function(){ if(m===media){ onTime(); updatePositionState(); } });
-  m.addEventListener("seeked", function(){ if(m===media){ updatePositionState(); var d = dur(); if(d && media.currentTime < d - ((showOf(cur&&cur.s).skipEnd)||0) - 1) endSkipped = false; } });
+  m.addEventListener("seeked", function(){ if(m===media){ if(progSeek) progSeek = false; else posDirty = true; updatePositionState(); var d = dur(); if(d && media.currentTime < d - ((showOf(cur&&cur.s).skipEnd)||0) - 1) endSkipped = false; } });
   m.addEventListener("ended", function(){ if(m===media && !endSkipped) finishEpisode(); });
   m.addEventListener("error", function(){ if(m===media && m.getAttribute("src")) toast("This episode wouldn't play. The show's server may be down."); });
 });
@@ -1205,12 +1210,348 @@ function syncTranscript(t){
   if(cueEls[i]){ cueEls[i].classList.add("now"); var box = $("txBox"), e = cueEls[i]; box.scrollTo({top: e.offsetTop - box.clientHeight/3, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); }
 }
 
+/* ---------- Dropbox sync ----------
+   Each person signs in with their own Dropbox. The app gets one folder of its own there
+   (Apps/<app name>) and keeps a single file, sync.json, with shows, subjects, favorites order,
+   listening spots and playback settings. The Podcast Index key never leaves the device.
+   Sign-in uses PKCE, so the App key below is public and no app secret exists. */
+var DBX_APP_KEY = "";
+var DBX_FILE = "/sync.json";
+var DBX_AUTH = "pp.dbx", DBX_BASE = "pp.dbx.base", DBX_PEND = "pp.dbx.pending";
+function lsGet(k){ try{ return JSON.parse(localStorage.getItem(k)||"null"); }catch(e){ return null; } }
+function lsSet(k, v){ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+function dbxKey(){ var o = null; try{ o = localStorage.getItem("pp.dbx.key"); }catch(e){} return DBX_APP_KEY || o || ""; }
+var dbx = lsGet(DBX_AUTH);
+var sync = {busy:null, again:false, timer:null, msg:"", err:false, at:0, sent:"", orphan:""};
+function dbxRedirect(){ return location.origin + location.pathname.replace(/index\.html$/,""); }
+/* The iPhone and iPad Home Screen app can't count on coming back from a sign-in page,
+   so there Dropbox shows a code to paste instead. */
+function codeFlow(){ return navigator.standalone === true; }
+function qs(o){ return Object.keys(o).map(function(k){ return encodeURIComponent(k)+"="+encodeURIComponent(o[k]); }).join("&"); }
+function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+function randStr(n){
+  var a = new Uint8Array(n), c = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+  crypto.getRandomValues(a); return Array.prototype.map.call(a, function(x){ return c[x % c.length]; }).join("");
+}
+function pkceChallenge(v){ return crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)).then(b64url); }
+/* One pending sign-in at a time, kept for 30 minutes, so redrawing Settings doesn't spoil a code being pasted. */
+function dbxPending(){
+  var p = lsGet(DBX_PEND);
+  if(p && p.v && Date.now()-p.at < 30*60*1000 && p.k===dbxKey()) return Promise.resolve(p);
+  p = {v:randStr(64), s:randStr(24), at:Date.now(), k:dbxKey()};
+  return pkceChallenge(p.v).then(function(ch){ p.ch = ch; lsSet(DBX_PEND, p); return p; });
+}
+function dbxAuthUrl(p, redirect){
+  var q = {client_id:dbxKey(), response_type:"code", code_challenge:p.ch, code_challenge_method:"S256", token_access_type:"offline"};
+  if(redirect){ q.redirect_uri = dbxRedirect(); q.state = p.s; }
+  return "https://www.dropbox.com/oauth2/authorize?"+qs(q);
+}
+function tokenCall(params){
+  return fetch("https://api.dropboxapi.com/oauth2/token", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:qs(params)})
+    .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ j.status = r.status; return j; }); });
+}
+function dbxExchange(code, p, redirect){
+  var q = {grant_type:"authorization_code", code:code, code_verifier:p.v, client_id:dbxKey()};
+  if(redirect) q.redirect_uri = dbxRedirect();
+  return tokenCall(q).then(function(j){ if(!j.access_token) throw new Error(j.error||"HTTP "+j.status); return j; });
+}
+/* A pasted code may come from either kind of sign-in, so try the likely one first, then the other. */
+function dbxUseCode(code){
+  code = String(code||"").trim();
+  if(!code) return Promise.reject(new Error("empty"));
+  var p = lsGet(DBX_PEND); if(!p) return Promise.reject(new Error("nopending"));
+  var first = !codeFlow() && sync.orphan ? true : false;
+  return dbxExchange(code, p, first).catch(function(){ return dbxExchange(code, p, !first); }).then(gotTokens);
+}
+function gotTokens(j){
+  dbx = {refresh:j.refresh_token||"", access:j.access_token, exp:Date.now()+(j.expires_in||14400)*1000, name:"", email:""};
+  lsSet(DBX_AUTH, dbx); lsSet(DBX_PEND, null); lsSet(DBX_BASE, null); sync.orphan = ""; sync.sent = "";
+  return dbxApi("users/get_current_account", null).then(function(a){
+    dbx.name = (a.name && a.name.display_name) || ""; dbx.email = a.email||""; lsSet(DBX_AUTH, dbx);
+  }, function(){}).then(function(){ return syncNow(); });
+}
+function dbxSignOut(){
+  var tok = dbx && dbx.access;
+  if(tok) fetch("https://api.dropboxapi.com/2/auth/token/revoke", {method:"POST", headers:{Authorization:"Bearer "+tok}}).catch(function(){});
+  dbx = null; lsSet(DBX_AUTH, null); lsSet(DBX_BASE, null); lsSet(DBX_PEND, null);
+  clearTimeout(sync.timer); sync.msg = ""; sync.err = false; sync.sent = "";
+}
+function dbxLost(){
+  dbx = null; lsSet(DBX_AUTH, null); lsSet(DBX_BASE, null);
+  setSync("Dropbox sign-in ended. Sign in again to keep syncing.", true); toast("Dropbox sign-in ended. Sign in again in Settings.");
+}
+function dbxToken(force){
+  if(!dbx) return Promise.reject(new Error("signedout"));
+  if(!force && dbx.access && Date.now() < dbx.exp-60000) return Promise.resolve(dbx.access);
+  if(!dbx.refresh){ dbxLost(); return Promise.reject(new Error("signedout")); }
+  if(dbxToken.p) return dbxToken.p;
+  var clear = function(){ dbxToken.p = null; };
+  dbxToken.p = tokenCall({grant_type:"refresh_token", refresh_token:dbx.refresh, client_id:dbxKey()}).then(function(j){
+    if(j.access_token){ dbx.access = j.access_token; dbx.exp = Date.now()+(j.expires_in||14400)*1000; lsSet(DBX_AUTH, dbx); return dbx.access; }
+    if(j.status===400 || j.status===401){ dbxLost(); throw new Error("signedout"); }
+    throw new Error("HTTP "+j.status);
+  });
+  dbxToken.p.then(clear, clear);
+  return dbxToken.p;
+}
+function dbxCall(url, headers, body, keepalive, retried){
+  return dbxToken(retried).then(function(tok){
+    var h = {Authorization:"Bearer "+tok}; for(var k in headers) h[k] = headers[k];
+    return fetch(url, {method:"POST", headers:h, body:body, keepalive:!!keepalive, cache:"no-store"});
+  }).then(function(r){ return (r.status===401 && !retried) ? dbxCall(url, headers, body, keepalive, true) : r; });
+}
+function dbxJson(r){ return r.json().catch(function(){ return {}; }); }
+function dbxApi(path, arg){
+  return dbxCall("https://api.dropboxapi.com/2/"+path, {"Content-Type":"application/json"}, JSON.stringify(arg==null?null:arg)).then(function(r){
+    return dbxJson(r).then(function(j){ if(!r.ok) throw new Error(j.error_summary||"HTTP "+r.status); return j; });
+  });
+}
+function dbxDownload(){
+  return dbxCall("https://content.dropboxapi.com/2/files/download", {"Dropbox-API-Arg":JSON.stringify({path:DBX_FILE})}).then(function(r){
+    if(r.status===409) return dbxJson(r).then(function(j){ if(/not_found/.test(j.error_summary||"")) return null; throw new Error(j.error_summary||"HTTP 409"); });
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    var meta = {}; try{ meta = JSON.parse(r.headers.get("Dropbox-API-Result")||"{}"); }catch(e){}
+    return r.text().then(function(t){
+      var d = null; try{ d = JSON.parse(t); }catch(e){}
+      if(meta.rev) return {rev:meta.rev, data:d};
+      return dbxApi("files/get_metadata", {path:DBX_FILE}).then(function(m){ return {rev:m.rev, data:d}; });
+    });
+  });
+}
+function dbxUpload(data, rev, keepalive){
+  var body = JSON.stringify(data);
+  var arg = {path:DBX_FILE, mode: rev ? {".tag":"update", update:rev} : {".tag":"add"}, autorename:false, mute:true, strict_conflict:true};
+  return dbxCall("https://content.dropboxapi.com/2/files/upload", {"Dropbox-API-Arg":JSON.stringify(arg), "Content-Type":"application/octet-stream"}, body, keepalive && body.length < 60000).then(function(r){
+    return dbxJson(r).then(function(j){
+      if(r.status===409 && /conflict/.test(j.error_summary||"")){ var e = new Error("conflict"); e.conflict = true; throw e; }
+      if(!r.ok) throw new Error(j.error_summary||"HTTP "+r.status);
+      return j.rev;
+    });
+  });
+}
+
+/* What travels between devices. Anything not listed here stays on the device. */
+function snap(){
+  return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, now:S.now, nowT:S.nowT||0,
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip}};
+}
+function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
+function stable(v){
+  if(v===undefined) return "u";
+  if(v===null || typeof v!=="object") return JSON.stringify(v);
+  if(Array.isArray(v)) return "["+v.map(stable).join(",")+"]";
+  return "{"+Object.keys(v).sort().filter(function(k){ return v[k]!==undefined; }).map(function(k){ return JSON.stringify(k)+":"+stable(v[k]); }).join(",")+"}";
+}
+function same(a, b){ return stable(a)===stable(b); }
+/* Three-way pick: whichever side changed since the last synced copy wins; if both did, `mine` decides. */
+function pick3(b, l, r, preferLocal){
+  var lc = !same(l, b), rc = !same(r, b);
+  return !lc ? r : !rc ? l : (preferLocal ? l : r);
+}
+function mergeFields(b, l, r, preferLocal){
+  var out = {}, keys = {};
+  [b||{}, l, r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = 1; }); });
+  Object.keys(keys).forEach(function(k){ var v = pick3((b||{})[k], l[k], r[k], preferLocal); if(v!==undefined) out[k] = copy(v); });
+  return out;
+}
+/* base: the copy last seen on Dropbox (null on a device's first sync). local: this device. remote: Dropbox now.
+   On a first sync Dropbox's copy wins ties, so a new device takes on the order and settings already set up. */
+function mergeSync(base, local, remote, fresh){
+  var B = base || {subs:{}, fav:[], pos:{}, posT:{}, played:{}, hideSugg:{}, prefs:{}};
+  var preferLocal = !!base;
+  var L = copy(local), R = copy(remote);
+  ["subs","pos","posT","played","hideSugg","prefs"].forEach(function(k){ B[k] = B[k]||{}; L[k] = L[k]||{}; R[k] = R[k]||{}; });
+  B.fav = B.fav||[]; L.fav = L.fav||[]; R.fav = R.fav||[];
+  if(fresh){ L.subs = {}; L.fav = []; }
+  var out = {subs:{}, pos:{}, posT:{}, played:{}, hideSugg:{}, prefs:{}};
+
+  // Shows: added on either side stay; removed on either side go, unless the other side added it fresh.
+  var ids = {}; [B.subs, L.subs, R.subs].forEach(function(o){ Object.keys(o).forEach(function(id){ ids[id] = 1; }); });
+  Object.keys(ids).forEach(function(id){
+    var b = B.subs[id], l = L.subs[id], r = R.subs[id];
+    if(!b){ out.subs[id] = (l && r) ? mergeFields(null, l, r, preferLocal) : copy(l||r); return; }
+    if(!l || !r) return;
+    out.subs[id] = mergeFields(b, l, r, preferLocal);
+  });
+
+  // Favorites order.
+  var lc = !same(L.fav, B.fav), rc = !same(R.fav, B.fav);
+  var order = !lc ? R.fav : !rc ? L.fav : (preferLocal ? L.fav.concat(R.fav) : R.fav.concat(L.fav));
+  var dropped = {};
+  B.fav.forEach(function(id){ if((lc && L.fav.indexOf(id)<0) || (rc && R.fav.indexOf(id)<0)) dropped[id] = 1; });
+  var seen = {};
+  out.fav = order.filter(function(id){ if(seen[id] || dropped[id] || !out.subs[id]) return false; seen[id] = 1; return true; });
+
+  // Listening spots: the newer one wins for each episode, including a spot cleared because it finished.
+  var eps = {}; [L.posT, R.posT, L.pos, R.pos].forEach(function(o){ Object.keys(o).forEach(function(g){ if(!/#len$/.test(g)) eps[g] = 1; }); });
+  Object.keys(eps).forEach(function(g){
+    var lt = L.posT[g]||0, rt = R.posT[g]||0, src = rt > lt ? R : L;
+    if(rt===lt && L.pos[g]==null) src = R;
+    if(src.pos[g]!=null) out.pos[g] = src.pos[g];
+    if(Math.max(lt, rt)) out.posT[g] = Math.max(lt, rt);
+    var len = Math.max(L.pos[g+"#len"]||0, R.pos[g+"#len"]||0); if(len) out.pos[g+"#len"] = len;
+  });
+  [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; out.played[g] = Math.max(out.played[g]||0, t); }); });
+  [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
+
+  ["speed","skipBack","skipFwd","adSkip"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+
+  var rn = R.nowT||0, ln = L.nowT||0;
+  if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
+  return out;
+}
+function isFresh(){
+  var ids = Object.keys(S.subs);
+  return !lsGet(DBX_BASE) && ids.length===1 && ids[0]===NEWSLINE.id && S.fav.length<=1 && !Object.keys(S.pos).length;
+}
+function applyMerged(m){
+  var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg});
+  var prefsBefore = stable(snap().prefs);
+  S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg;
+  ["speed","skipBack","skipFwd","adSkip"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  var idle = !cur || media.paused;
+  if(m.nowT > (S.nowT||0) && m.now && m.now.u && idle){
+    S.nowT = m.nowT;
+    if(!cur || cur.g!==m.now.g){ S.now = m.now; playEp(m.now, false); }
+  }
+  // Move a paused episode to a spot reached on another device.
+  if(cur && idle && S.pos[cur.g]!=null && media.readyState>=1 && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3){
+    progSeek = true; try{ media.currentTime = S.pos[cur.g]; }catch(e){ progSeek = false; }
+  }
+  save(true, true);
+  if(stable(snap().prefs)!==prefsBefore){ applySkipLabels(); $("speedSel").value = String(S.speed||1); if(cur) media.playbackRate = S.speed||1; }
+  var changed = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg})!==before;
+  if(changed && route.tab!=="settings" && !arranging) render();
+}
+function setSync(msg, err){
+  sync.msg = msg; sync.err = !!err;
+  var n = $("syncStatus"); if(n){ n.textContent = msg; n.className = "status"+(err?" err":""); }
+}
+function syncedLabel(){
+  if(!sync.at) return "";
+  var d = new Date(sync.at), today = d.toDateString()===new Date().toDateString();
+  return "Last synced "+(today? "" : fmtDate(d.toISOString())+", ")+d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})+".";
+}
+function runSync(tries, keepalive){
+  return dbxDownload().then(function(remote){
+    var baseRec = lsGet(DBX_BASE), base = baseRec && baseRec.data;
+    var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
+    var local = copy(snap());
+    var merged = rd ? mergeSync(base, local, rd, !base && isFresh()) : local;
+    applyMerged(merged);
+    var out = copy(snap());
+    if(rd && same(out, pickSnap(rd))){ lsSet(DBX_BASE, {data:out}); return; }
+    var file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
+    return dbxUpload(file, remote && remote.rev, keepalive).then(function(){ lsSet(DBX_BASE, {data:out}); }, function(e){
+      if(e.conflict && tries < 3) return runSync(tries+1, false);
+      throw e;
+    });
+  });
+}
+function pickSnap(d){ var o = {}; Object.keys(snap()).forEach(function(k){ o[k] = d[k]; }); return o; }
+function syncNow(keepalive){
+  if(!dbx || !dbxKey()) return Promise.resolve();
+  if(sync.busy){ sync.again = true; return sync.busy; }
+  clearTimeout(sync.timer);
+  if(navigator.onLine===false){ setSync("Offline. Changes will sync when you're back online."); return Promise.resolve(); }
+  setSync("Syncing…");
+  sync.busy = runSync(0, keepalive).then(function(){
+    sync.at = Date.now(); sync.sent = stable(snap()); sync.syncedKey = keyState(); setSync(syncedLabel());
+  }, function(e){
+    if(!dbx) return;
+    if(e && e.message==="signedout") return;
+    var offline = (e instanceof TypeError) || navigator.onLine===false;
+    setSync(offline ? "Couldn't reach Dropbox. Will try again shortly." : "Sync didn't work this time ("+(e && e.message || "error")+"). Will try again.", !offline);
+  }).then(function(){ sync.busy = null; if(sync.again){ sync.again = false; syncSoon(800); } });
+  return sync.busy;
+}
+function syncSoon(ms){ if(!dbx) return; clearTimeout(sync.timer); sync.timer = setTimeout(function(){ syncNow(); }, ms); }
+/* Shows, favorites and settings sync a few seconds after a change. Listening spots ride along,
+   and on their own go out every two minutes while playing, on pause, and when the app goes to the background. */
+function keyState(){ var s = snap(); return stable({subs:s.subs, fav:s.fav, played:s.played, hideSugg:s.hideSugg, prefs:s.prefs}); }
+function syncCheck(){
+  if(!dbx || sync.busy) return;
+  if(keyState()!==sync.syncedKey) syncSoon(3000);
+  else if(stable(snap())!==sync.sent && Date.now()-sync.at > 120000) syncSoon(1000);
+}
+setInterval(syncCheck, 30000);
+window.addEventListener("online", function(){ syncSoon(500); });
+document.addEventListener("visibilitychange", function(){ if(!dbx) return; if(document.visibilityState==="visible") syncSoon(300); else syncNow(true); });
+
+/* Coming back from Dropbox's sign-in page. */
+function dbxReturn(){
+  var p = new URLSearchParams(location.search);
+  if(!p.has("code") && !p.has("error")) return;
+  try{ history.replaceState(null, "", dbxRedirect()); }catch(e){}
+  route = {tab:"settings"};
+  if(p.get("error")){ setSync(p.get("error")==="access_denied" ? "Dropbox sign-in was canceled." : "Dropbox sign-in didn't finish. Try again.", p.get("error")!=="access_denied"); return; }
+  var pend = lsGet(DBX_PEND), code = p.get("code");
+  if(!pend || pend.s!==p.get("state")){ sync.orphan = code; return; }
+  setSync("Finishing sign-in…");
+  dbxExchange(code, pend, true).then(gotTokens).then(function(){ if(route.tab==="settings" && !route.show) render(); }, function(){
+    setSync("Dropbox sign-in didn't finish. Try again.", true); if(route.tab==="settings") render();
+  });
+}
+function syncCard(){
+  var card = el("div",{class:"card", id:"syncCard"},[ el("h3",{text:"Sync with Dropbox"}) ]);
+  var status = el("p",{class:"status"+(sync.err?" err":""), id:"syncStatus", "aria-live":"polite", text:sync.msg});
+  if(!dbxKey()){
+    card.appendChild(el("p",{text:"Dropbox sync isn't switched on for this copy of the app yet. Until it is, use Save backup and Restore backup below to move between devices."}));
+    return card;
+  }
+  if(dbx){
+    card.appendChild(el("p",{text:"Signed in"+(dbx.name? " as "+dbx.name : "")+(dbx.email? " ("+dbx.email+")" : "")+". Shows, subjects, favorites order, listening spots and playback settings stay the same on every device signed in to this Dropbox. Your Podcast Index key stays on each device."}));
+    if(!sync.msg && sync.at) status.textContent = syncedLabel();
+    card.appendChild(status);
+    card.appendChild(el("div",{class:"btn-row"},[
+      el("button",{class:"btn secondary", text:"Sync now", onclick:function(){ syncNow(); }}),
+      el("button",{class:"btn secondary", text:"Sign out of Dropbox", onclick:function(){ dbxSignOut(); toast("Signed out of Dropbox. Your shows stay on this device."); render(); }})
+    ]));
+    return card;
+  }
+  card.appendChild(el("p",{text:"Sign in with your own Dropbox to keep your shows, subjects, favorites order and listening spots the same on your iPhone, iPad and computer. The app can only see its own folder in your Dropbox, Apps, then the app's name. Do this once on each device, inside the app you added to your Home Screen."}));
+  var codeInp = el("input",{id:"dbxCode", type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", placeholder:"Paste the code from Dropbox", value:sync.orphan||""});
+  var connect = el("button",{class:"btn", text:"Finish sign-in", onclick:function(){
+    setSync("Finishing sign-in…");
+    dbxUseCode(codeInp.value).then(function(){ render(); }, function(e){
+      setSync(e.message==="empty" ? "Paste the code Dropbox showed you first." : "Dropbox didn't accept that code. Codes work once and expire after a few minutes, so get a new one and try again.", true);
+    });
+  }});
+  var codeBox = el("div",{class:"form-grid"},[ el("label",{class:"field", for:"dbxCode"},[ "Code from Dropbox", codeInp ]) ]);
+  var openLink = el("a",{class:"btn", href:"#", target:"_blank", rel:"noopener", style:"text-decoration:none;display:inline-flex;align-items:center", text:"Get a sign-in code from Dropbox"});
+  var signBtn = el("button",{class:"btn", text:"Sign in with Dropbox", disabled:true});
+  var codeLink = el("button",{class:"btn secondary", text:"Use a sign-in code instead"});
+  var codeArea = el("div",{style:"display:flex;flex-direction:column;gap:10px"},[
+    el("ol",{class:"steps"},[ el("li",{text:"Tap Get a sign-in code and allow access in Dropbox."}), el("li",{text:"Copy the code Dropbox shows, come back here, and paste it below."}) ]),
+    el("div",{class:"btn-row"},[ openLink ]), codeBox, el("div",{class:"btn-row"},[ connect ])
+  ]);
+  dbxPending().then(function(p){
+    openLink.href = dbxAuthUrl(p, false);
+    signBtn.disabled = false; signBtn.onclick = function(){ location.assign(dbxAuthUrl(p, true)); };
+  });
+  if(sync.orphan){
+    card.appendChild(el("p",{text:"Dropbox sent you back here with a code. If you started sign-in from the Home Screen app, copy this code and paste it there. Otherwise tap Finish sign-in."}));
+    card.appendChild(codeBox); card.appendChild(el("div",{class:"btn-row"},[ connect, el("button",{class:"btn secondary", text:"Copy code", onclick:function(){ try{ navigator.clipboard.writeText(sync.orphan).then(function(){ toast("Code copied"); }); }catch(e){} }}) ]));
+  } else if(codeFlow()){
+    card.appendChild(codeArea);
+  } else {
+    codeArea.hidden = true;
+    codeLink.onclick = function(){ codeArea.hidden = false; codeLink.hidden = true; };
+    card.appendChild(el("div",{class:"btn-row"},[ signBtn, codeLink ]));
+    card.appendChild(codeArea);
+  }
+  card.appendChild(status);
+  return card;
+}
+
 /* ---------- start ---------- */
+dbxReturn();
 applySkipLabels();
 if(S.now && S.now.u){ playEp(S.now, false); }
 render();
 if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(function(){});
-window.__pp = {S:S, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed};
+if(dbx) syncNow();
+window.__pp = {S:S, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
 })();
 </script>
 </body>
