@@ -1312,7 +1312,7 @@ function dbxApi(path, arg){
 function dbxDownload(){
   return dbxCall("https://content.dropboxapi.com/2/files/download", {"Dropbox-API-Arg":JSON.stringify({path:DBX_FILE})}).then(function(r){
     if(r.status===409) return dbxJson(r).then(function(j){ if(/not_found/.test(j.error_summary||"")) return null; throw new Error(j.error_summary||"HTTP 409"); });
-    if(!r.ok) throw new Error("HTTP "+r.status);
+    if(!r.ok) return dbxJson(r).then(function(j){ throw new Error(j.error_summary||"HTTP "+r.status); });
     var meta = {}; try{ meta = JSON.parse(r.headers.get("Dropbox-API-Result")||"{}"); }catch(e){}
     return r.text().then(function(t){
       var d = null; try{ d = JSON.parse(t); }catch(e){}
@@ -1470,6 +1470,7 @@ function syncNow(keepalive){
     if(!dbx) return;
     if(e && e.message==="signedout") return;
     var offline = (e instanceof TypeError) || navigator.onLine===false;
+    if(/missing_scope/.test(e && e.message || "")){ setSync("Dropbox hasn't given this app permission to save its sync file. Whoever set up the Dropbox app needs to tick files.content.read and files.content.write on its Permissions tab and click Submit. Then sign out here and sign in again.", true); return; }
     setSync(offline ? "Couldn't reach Dropbox. Will try again shortly." : "Sync didn't work this time ("+(e && e.message || "error")+"). Will try again.", !offline);
   }).then(function(){ sync.busy = null; holdEnd(); if(sync.again){ sync.again = false; syncSoon(800); } });
   return sync.busy;
