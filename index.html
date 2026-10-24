@@ -1422,7 +1422,8 @@ function applyMerged(m){
   // Move to a spot reached on another device: when paused here, or when play only just started
   // here and the other device's spot is newer than anything this device had.
   var newer = cur && (S.posT[cur.g]||0) > lt;
-  if(cur && S.pos[cur.g]!=null && media.readyState>=1 && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3 && (idle || (hold.on && !hold.user && newer))){
+  var dd = dur();
+  if(cur && S.pos[cur.g]!=null && media.readyState>=1 && (!dd || S.pos[cur.g] < dd-10) && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3 && (idle || (hold.on && !hold.user && newer))){
     wantAt = S.pos[cur.g]; progSeek = true; try{ media.currentTime = S.pos[cur.g]; }catch(e){ progSeek = false; }
     if(!idle) toast("Picked up where you left off on another device");
   }

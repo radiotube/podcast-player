@@ -302,7 +302,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     b("Show", show);
     b("New device", function(){ localStorage.setItem("mock.wipe","1"); location.href = location.pathname; });
     b("Clear remote", function(){ localStorage.removeItem(REM); show(); });
-    b("Other device: +10 min on now, speed 2", function(){ var rem = JSON.parse(localStorage.getItem(REM)); var d = JSON.parse(rem.body); var g = d.now.g; d.pos[g] = (d.pos[g]||0)+600; d.posT[g] = Date.now(); d.nowT = Date.now(); d.prefs.speed = 2; localStorage.setItem(REM, JSON.stringify({rev:rem.rev+1, body:JSON.stringify(d)})); show(); });
+    b("Other device: +10 min on now, speed 2", function(){ var rem = JSON.parse(localStorage.getItem(REM)); var d = JSON.parse(rem.body); var g = d.now.g; var L = d.pos[g+"#len"]||3600; d.pos[g] = Math.min((d.pos[g]||0)+600, L-60); if(d.pos[g] < 120) d.pos[g] = Math.min(600, L-60); delete d.played[g]; d.posT[g] = Date.now(); d.nowT = Date.now(); d.prefs.speed = 2; localStorage.setItem(REM, JSON.stringify({rev:rem.rev+1, body:JSON.stringify(d)})); show(); });
     b("Other device: unfollow 2nd fav", function(){ var rem = JSON.parse(localStorage.getItem(REM)); var d = JSON.parse(rem.body); var id = d.fav[1]; delete d.subs[id]; d.fav.splice(1,1); localStorage.setItem(REM, JSON.stringify({rev:rem.rev+1, body:JSON.stringify(d)})); show(); });
     b("Conflict next upload", function(){ localStorage.setItem("mock.conflictOnce","1"); });
     b("Expire AT1", function(){ localStorage.setItem("mock.expire","1"); });
@@ -1495,7 +1495,8 @@ function applyMerged(m){
   // Move to a spot reached on another device: when paused here, or when play only just started
   // here and the other device's spot is newer than anything this device had.
   var newer = cur && (S.posT[cur.g]||0) > lt;
-  if(cur && S.pos[cur.g]!=null && media.readyState>=1 && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3 && (idle || (hold.on && !hold.user && newer))){
+  var dd = dur();
+  if(cur && S.pos[cur.g]!=null && media.readyState>=1 && (!dd || S.pos[cur.g] < dd-10) && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3 && (idle || (hold.on && !hold.user && newer))){
     wantAt = S.pos[cur.g]; progSeek = true; try{ media.currentTime = S.pos[cur.g]; }catch(e){ progSeek = false; }
     if(!idle) toast("Picked up where you left off on another device");
   }
