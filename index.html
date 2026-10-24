@@ -386,7 +386,7 @@ function fetchPIEps(show){
     if(!show.piId && items[0].feedId){ show.piId = items[0].feedId; }
     return items.filter(function(i){return i.enclosureUrl;}).map(function(i){
       var tr = (i.transcripts && i.transcripts.length) ? i.transcripts.map(function(t){return {url:t.url, type:t.type||""};}) : (i.transcriptUrl? [{url:i.transcriptUrl, type:""}] : []);
-      return {g:String(i.guid||i.enclosureUrl), s:show.id, t:i.title||"Episode", d:i.datePublished? new Date(i.datePublished*1000).toISOString() : "",
+      return {g:String(i.guid||i.enclosureUrl).trim(), s:show.id, t:i.title||"Episode", d:i.datePublished? new Date(i.datePublished*1000).toISOString() : "",
         u:i.enclosureUrl, v:isVideo(i.enclosureType, i.enclosureUrl), ty:i.enclosureType||"", len:i.duration||0, x:plain(i.description||"").slice(0,1500),
         a:i.image||i.feedImage||"", ch:i.chaptersUrl||"", tr:tr};
     });
@@ -398,7 +398,7 @@ function fetchAppleEps(show){
     var head = rs.filter(function(r){return r.kind==="podcast";})[0];
     if(head){ if(!show.feedUrl && head.feedUrl) show.feedUrl = head.feedUrl; if(head.artworkUrl600 && !show.art) show.art = bigArt(head.artworkUrl600); }
     var eps = rs.filter(function(r){return r.wrapperType==="podcastEpisode" && r.episodeUrl;}).map(function(r){
-      return {g:String(r.episodeGuid||r.episodeUrl), s:show.id, t:r.trackName||"Episode", d:r.releaseDate, u:r.episodeUrl,
+      return {g:String(r.episodeGuid||r.episodeUrl).trim(), s:show.id, t:r.trackName||"Episode", d:r.releaseDate, u:r.episodeUrl,
         v:isVideo(r.episodeContentType, r.episodeUrl), ty:r.episodeContentType||"", len:r.trackTimeMillis? r.trackTimeMillis/1000 : 0,
         x:plain(r.description||r.shortDescription||"").slice(0,1500), a:bigArt(r.artworkUrl600||r.artworkUrl160||""), ch:"", tr:null};
     });
@@ -425,7 +425,7 @@ function rssItems(x, sid){
     var title = item.querySelector("title"); var date = item.querySelector("pubDate"); var desc = item.querySelector("description");
     var tr = Array.prototype.map.call(item.getElementsByTagNameNS("*","transcript"), function(t){ return {url:t.getAttribute("url"), type:t.getAttribute("type")||""}; }).filter(function(t){return t.url;});
     var chEl = item.getElementsByTagNameNS("*","chapters")[0];
-    return {g:String((g&&g.textContent)||u), s:sid, t:title?title.textContent:"Episode", d:date?new Date(date.textContent).toISOString():"",
+    return {g:String((g&&g.textContent.trim())||u).trim(), s:sid, t:title?title.textContent:"Episode", d:date?new Date(date.textContent).toISOString():"",
       u:u, v:isVideo(enc.getAttribute("type"), u), ty:enc.getAttribute("type")||"", len:dur, x:plain(desc?desc.textContent:"").slice(0,1500), a:"", ch: chEl? chEl.getAttribute("url")||"" : "", tr:tr};
   }).filter(Boolean);
 }
@@ -936,7 +936,8 @@ function restore(f){
 
 /* ---------- Player ---------- */
 var audio = $("audio"), video = $("video"), media = audio, cur = null, sleepEnd = 0, sleepTimer = null, lastSaved = 0;
-var ads = [], endSkipped = false, posDirty = false, progSeek = false;
+var ads = [], endSkipped = false, posDirty = false, progSeek = false, wantAt = 0;
+var hold = {on:false, user:false, timer:null};
 function applySkipLabels(){
   $("backLbl").textContent = S.skipBack; $("fwdLbl").textContent = S.skipFwd;
   $("back15").setAttribute("aria-label","Back "+S.skipBack+" seconds"); $("fwd30").setAttribute("aria-label","Forward "+S.skipFwd+" seconds");
@@ -968,7 +969,7 @@ function playEp(e, autoplay){
     var start = S.pos[e.g]||0, target = start>5 ? start : 0;
     var d = dur();
     if(intro && target < intro && (!d || intro < d-30)){ target = intro; if(autoplay) toast("Skipped the first "+fmtSecs(intro)); }
-    if(target>0 && (!d || target < d-10)){ progSeek = true; try{ media.currentTime = target; }catch(x){ progSeek = false; } }
+    if(target>0 && (!d || target < d-10)){ wantAt = target; progSeek = true; try{ media.currentTime = target; }catch(x){ progSeek = false; } }
     media.playbackRate = S.speed||1;
   });
   $("seek").value = 0; $("tCur").textContent = "0:00"; $("tLeft").textContent = cur.len ? "-"+fmt(cur.len) : "-0:00";
@@ -1073,8 +1074,9 @@ function onTime(){
 function savePos(now){
   if(!cur || !media.src || endSkipped) return; lastSaved = Date.now();
   var d = dur(); if(d) S.pos[cur.g+"#len"] = Math.floor(d);
-  if(posDirty){ posDirty = false; var t = media.currentTime||0; if(t>5){ S.pos[cur.g] = Math.floor(t); S.posT[cur.g] = Date.now(); } }
+  if(posDirty && !hold.on){ posDirty = false; var t = media.currentTime||0; if(t>5){ S.pos[cur.g] = Math.floor(t); S.posT[cur.g] = Date.now(); } }
   save(now, true);
+  if(!media.paused) syncCheck();
 }
 function finishEpisode(){
   if(!cur) return;
@@ -1084,11 +1086,12 @@ function finishEpisode(){
 }
 [audio, video].forEach(function(m){
   m.addEventListener("timeupdate", function(){ if(m===media) onTime(); });
-  m.addEventListener("play", function(){ if(m===media){ setPlayIcons(); updatePositionState(); if(cur){ S.now = cur; S.nowT = Date.now(); save(); } } });
-  m.addEventListener("pause", function(){ if(m===media){ setPlayIcons(); savePos(true); syncSoon(1500); } });
+  m.addEventListener("play", function(){ if(m===media){ setPlayIcons(); updatePositionState(); if(cur){ S.now = cur; S.nowT = Date.now(); save(); holdStart(); } } });
+  m.addEventListener("playing", function(){ if(m===media && wantAt){ var w = wantAt; wantAt = 0; if(Math.abs((media.currentTime||0) - w) > 3){ progSeek = true; try{ media.currentTime = w; }catch(e){ progSeek = false; } } } });
+  m.addEventListener("pause", function(){ if(m===media){ setPlayIcons(); savePos(true); syncNow(); } });
   m.addEventListener("loadedmetadata", function(){ if(m===media){ onTime(); updatePositionState(); } });
   m.addEventListener("durationchange", function(){ if(m===media){ onTime(); updatePositionState(); } });
-  m.addEventListener("seeked", function(){ if(m===media){ if(progSeek) progSeek = false; else posDirty = true; updatePositionState(); var d = dur(); if(d && media.currentTime < d - ((showOf(cur&&cur.s).skipEnd)||0) - 1) endSkipped = false; } });
+  m.addEventListener("seeked", function(){ if(m===media){ if(progSeek) progSeek = false; else { posDirty = true; wantAt = 0; hold.user = true; } updatePositionState(); var d = dur(); if(d && media.currentTime < d - ((showOf(cur&&cur.s).skipEnd)||0) - 1) endSkipped = false; } });
   m.addEventListener("ended", function(){ if(m===media && !endSkipped) finishEpisode(); });
   m.addEventListener("error", function(){ if(m===media && m.getAttribute("src")) toast("This episode wouldn't play. The show's server may be down."); });
 });
@@ -1406,6 +1409,7 @@ function isFresh(){
 }
 function applyMerged(m){
   var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg});
+  var lt = cur ? (S.posT[cur.g]||0) : 0;
   var prefsBefore = stable(snap().prefs);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg;
   ["speed","skipBack","skipFwd","adSkip"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
@@ -1415,9 +1419,13 @@ function applyMerged(m){
     S.nowT = m.nowT;
     if(!cur || cur.g!==m.now.g){ S.now = m.now; playEp(m.now, false); }
   }
-  // Move a paused episode to a spot reached on another device.
-  if(cur && idle && S.pos[cur.g]!=null && media.readyState>=1 && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3){
-    progSeek = true; try{ media.currentTime = S.pos[cur.g]; }catch(e){ progSeek = false; }
+  // Move to a spot reached on another device: when paused here, or when play only just started
+  // here and the other device's spot is newer than anything this device had.
+  var newer = cur && (S.posT[cur.g]||0) > lt;
+  var dd = dur();
+  if(cur && S.pos[cur.g]!=null && media.readyState>=1 && (!dd || S.pos[cur.g] < dd-10) && Math.abs((media.currentTime||0) - S.pos[cur.g]) > 3 && (idle || (hold.on && !hold.user && newer))){
+    wantAt = S.pos[cur.g]; progSeek = true; try{ media.currentTime = S.pos[cur.g]; }catch(e){ progSeek = false; }
+    if(!idle) toast("Picked up where you left off on another device");
   }
   save(true, true);
   if(stable(snap().prefs)!==prefsBefore){ applySkipLabels(); $("speedSel").value = String(S.speed||1); if(cur) media.playbackRate = S.speed||1; }
@@ -1463,9 +1471,17 @@ function syncNow(keepalive){
     if(e && e.message==="signedout") return;
     var offline = (e instanceof TypeError) || navigator.onLine===false;
     setSync(offline ? "Couldn't reach Dropbox. Will try again shortly." : "Sync didn't work this time ("+(e && e.message || "error")+"). Will try again.", !offline);
-  }).then(function(){ sync.busy = null; if(sync.again){ sync.again = false; syncSoon(800); } });
+  }).then(function(){ sync.busy = null; holdEnd(); if(sync.again){ sync.again = false; syncSoon(800); } });
   return sync.busy;
 }
+/* When play starts and Dropbox hasn't been checked in the last little while, hold off on
+   recording this device's spot until the check is done, so a newer spot from another device wins. */
+function holdStart(){
+  if(!dbx || !dbxKey() || navigator.onLine===false || (sync.at && Date.now()-sync.at < 20000)) return;
+  hold.on = true; hold.user = false; clearTimeout(hold.timer); hold.timer = setTimeout(holdEnd, 15000);
+  syncNow();
+}
+function holdEnd(){ if(!hold.on) return; hold.on = false; clearTimeout(hold.timer); }
 function syncSoon(ms){ if(!dbx) return; clearTimeout(sync.timer); sync.timer = setTimeout(function(){ syncNow(); }, ms); }
 /* Shows, favorites and settings sync a few seconds after a change. Listening spots ride along,
    and on their own go out every two minutes while playing, on pause, and when the app goes to the background. */
