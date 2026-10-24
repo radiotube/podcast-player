@@ -309,7 +309,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     b("Revoke refresh", function(){ localStorage.setItem("mock.revoked","1"); var a = JSON.parse(localStorage.getItem("pp.dbx")); a.exp = 0; localStorage.setItem("pp.dbx", JSON.stringify(a)); });
     b("Slow Dropbox on/off", function(){ localStorage.setItem("mock.slow", localStorage.getItem("mock.slow")==="1"?"0":"1"); show(); });
     b("Offline on/off", function(){ localStorage.setItem("mock.offline", localStorage.getItem("mock.offline")==="1"?"0":"1"); show(); });
-    b("Simulate Dropbox return", function(){ var p = JSON.parse(localStorage.getItem("pp.dbx.pending")); location.href = location.pathname+"?code=GOODCODE&state="+(p?p.s:"x"); });
+    b("Simulate Dropbox return", function(){ localStorage.removeItem("mock.revoked"); var p = JSON.parse(localStorage.getItem("pp.dbx.pending")); location.href = location.pathname+"?code=GOODCODE&state="+(p?p.s:"x"); });
     b("Return w/ bad state", function(){ location.href = location.pathname+"?code=GOODCODE&state=nope"; });
     b("PKCE vector", function(){ __pp.pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWjOXjXk").then(function(c){ pre.textContent = "challenge="+c; }); });
     b("Real CORS check", function(){
