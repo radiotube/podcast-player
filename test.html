@@ -250,6 +250,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 <script>
 (function(){
   var REM="mock.remote";
+  if(localStorage.getItem("mock.wipe")==="1"){ ["pp.v1","pp.dbx","pp.dbx.base","pp.dbx.pending","mock.wipe"].forEach(function(k){ localStorage.removeItem(k); }); sessionStorage.clear(); }
   localStorage.setItem("pp.dbx.key","TESTKEY");
   var realFetch = window.fetch.bind(window);
   window.__calls = JSON.parse(sessionStorage.getItem("mock.calls")||"[]");
@@ -295,7 +296,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
       pre.textContent = out;
     }
     b("Show", show);
-    b("New device", function(){ ["pp.v1","pp.dbx","pp.dbx.base","pp.dbx.pending"].forEach(function(k){ localStorage.removeItem(k); }); sessionStorage.clear(); location.href = location.pathname; });
+    b("New device", function(){ localStorage.setItem("mock.wipe","1"); location.href = location.pathname; });
     b("Clear remote", function(){ localStorage.removeItem(REM); show(); });
     b("Other device: +10 min on now, speed 2", function(){ var rem = JSON.parse(localStorage.getItem(REM)); var d = JSON.parse(rem.body); var g = d.now.g; d.pos[g] = (d.pos[g]||0)+600; d.posT[g] = Date.now(); d.nowT = Date.now(); d.prefs.speed = 2; localStorage.setItem(REM, JSON.stringify({rev:rem.rev+1, body:JSON.stringify(d)})); show(); });
     b("Other device: unfollow 2nd fav", function(){ var rem = JSON.parse(localStorage.getItem(REM)); var d = JSON.parse(rem.body); var id = d.fav[1]; delete d.subs[id]; d.fav.splice(1,1); localStorage.setItem(REM, JSON.stringify({rev:rem.rev+1, body:JSON.stringify(d)})); show(); });
