@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CORS probe</title>
+<style>body{font:12px monospace;margin:8px} td{border-bottom:1px solid #ccc;padding:2px 4px;vertical-align:top} .y{color:green} .n{color:#b00}</style></head>
+<body><div id="sum">running…</div><table id="t"></table><pre id="raw"></pre>
+<script>
+var IDS = [546373540,553604212,269611828,283627069,73800128,297680411,284922000,320953784,959110003,1567804784,78370505,1082234765,997551565,1052380039,1351960656,1072931592,631558915,1494508760,1494508201,1521870190,923860083,1523712251,1523400352,1576465941,1479346591,1526885135,1360060569,1584274529,1620275036,1320704694,1631777379,1670904926,269169796,1699715309,360084272,1600409359,121493645,1837497754,335549005,1854537564,1087110764,1854215849,1877895693,642198704,1868092746,1138657182,1603639502,306390087,1524108558];
+var jn=0;
+function jsonp(url){ return new Promise(function(res,rej){ var cb="__p"+(++jn); var s=document.createElement("script"); var tm=setTimeout(function(){rej(new Error("timeout"));},20000); window[cb]=function(d){clearTimeout(tm);res(d);}; s.onerror=function(){rej(new Error("net"));}; s.src=url+"&callback="+cb; document.head.appendChild(s); }); }
+function readSome(r, max){ var rd=r.body.getReader(), parts=[], n=0; return (function pump(){ return rd.read().then(function(x){ if(x.done||n>=max){ try{rd.cancel();}catch(e){} var b=new Uint8Array(n),o=0; parts.forEach(function(p){b.set(p,o);o+=p.length;}); return b; } parts.push(x.value); n+=x.value.length; return pump(); }); })(); }
+function tryFetch(u, opts){ var ctl=new AbortController(); var tm=setTimeout(function(){ctl.abort();},20000); opts.signal=ctl.signal; opts.mode="cors";
+  return fetch(u, opts).then(function(r){ return readSome(r, 400000).then(function(b){ clearTimeout(tm); return {ok:true, st:r.status, url:r.url, cr:r.headers.get("content-range")||"", cl:r.headers.get("content-length")||"", ct:r.headers.get("content-type")||"", n:b.length, b:b}; }); }, function(e){ clearTimeout(tm); return {ok:false, err:String(e)}; }); }
+/* MP3 frames */
+var BR1=[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320], BR2=[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160], SR={3:[44100,48000,32000],2:[22050,24000,16000],0:[11025,12000,8000]};
+function hdr(b,i){ if(b[i]!==0xFF||(b[i+1]&0xE0)!==0xE0) return null; var ver=(b[i+1]>>3)&3, lay=(b[i+1]>>1)&3; if(ver===1||lay!==1) return null; var bi=b[i+2]>>4, si=(b[i+2]>>2)&3, pad=(b[i+2]>>1)&1; if(bi===0||bi===15||si===3) return null; var br=(ver===3?BR1:BR2)[bi], sr=SR[ver][si]; var len=Math.floor((ver===3?144:72)*br*1000/sr)+pad; return {len:len, spf:ver===3?1152:576, sr:sr, br:br, ch:((b[i+3]>>6)===3)?1:2}; }
+function frames(b){ var i=0; if(b[0]===0x49&&b[1]===0x44&&b[2]===0x33){ i=10+((b[6]&127)<<21|(b[7]&127)<<14|(b[8]&127)<<7|(b[9]&127)); }
+  var out=[]; while(i+4<b.length){ var h=hdr(b,i); if(h && (i+h.len+4>b.length || hdr(b,i+h.len))){ out.push(i); i+=h.len; } else i++; } return {start:out[0], list:out, h: out.length? hdr(b,out[0]):null}; }
+function decode(b){ var f=frames(b); if(!f.list.length) return Promise.resolve({err:"no mp3 frames"}); var last=f.list[f.list.length-1]; var chunk=b.slice(f.list[0], last);
+  var ctx=new OfflineAudioContext(1,1,22050); return ctx.decodeAudioData(chunk.buffer).then(function(ab){ var d=ab.getChannelData(0), w=Math.round(ab.sampleRate*0.05), q=0, tot=0; for(var i=0;i+w<=d.length;i+=w){ var s=0; for(var j=i;j<i+w;j++) s+=d[j]*d[j]; var db=10*Math.log10(s/w+1e-12); tot++; if(db<-42) q++; } return {sec:ab.duration.toFixed(1), frames:f.list.length, expSec:(f.list.length*f.h.spf/f.h.sr).toFixed(1), br:f.h.br, sr:f.h.sr, quiet:Math.round(100*q/tot)+"%"}; }, function(e){ return {err:"decode "+e}; }); }
+var rows=[], T=document.getElementById("t");
+function row(a){ var tr=document.createElement("tr"); a.forEach(function(x){ var td=document.createElement("td"); td.innerHTML=x; tr.appendChild(td); }); T.appendChild(tr); }
+row(["show","genre","type","range GET","plain GET","preflight","decode","final host"]);
+var res=[];
+function one(id){
+  return jsonp("https://itunes.apple.com/lookup?entity=podcastEpisode&limit=5&id="+id).then(function(d){
+    var rs=d.results||[], head=rs.filter(function(r){return r.kind==="podcast";})[0]||{};
+    var ep=rs.filter(function(r){return r.wrapperType==="podcastEpisode"&&r.episodeUrl;})[0];
+    if(!ep){ row([head.collectionName||id, head.primaryGenreName||"", "", "no episode"]); return; }
+    var u=ep.episodeUrl, rec={id:id, t:head.collectionName, g:(head.genres||[]).join("/"), pg:head.primaryGenreName, ty:ep.episodeContentType, u:u};
+    return tryFetch(u,{headers:{Range:"bytes=0-399999"}}).then(function(a){ rec.range=a;
+      return tryFetch(u,{}).then(function(p){ rec.plain=p;
+        return tryFetch(u,{headers:{Range:"bytes=0-399999","X-Probe":"1"}}).then(function(pf){ rec.pre=pf;
+          var b=(a.ok&&a.b)||(p.ok&&p.b); return (b? decode(b) : Promise.resolve({err:"-"})).then(function(dc){ rec.dec=dc;
+            function s(x){ return x.ok? '<span class=y>'+x.st+' '+x.n+'B '+(x.cr||"")+'</span>' : '<span class=n>'+x.err.slice(0,40)+'</span>'; }
+            var host=""; try{ host=new URL((a.ok&&a.url)||(p.ok&&p.url)||u).host; }catch(e){}
+            row([rec.t, rec.pg, (ep.episodeContentType||"").replace("audio/",""), s(a), s(p), s(pf), dc.err? '<span class=n>'+dc.err+'</span>' : dc.sec+'s/'+dc.expSec+'s '+dc.br+'k '+dc.sr+' q'+dc.quiet, host]);
+            delete a.b; delete p.b; delete pf.b; res.push(rec);
+          }); }); }); });
+  }).catch(function(e){ row([String(id),"","","lookup "+e]); });
+}
+(function seq(i){ if(i>=IDS.length){ var ok=res.filter(function(r){return r.range.ok||r.plain.ok;}).length; document.getElementById("sum").textContent="DONE "+ok+"/"+res.length+" readable"; document.getElementById("raw").textContent=JSON.stringify(res.map(function(r){return {t:r.t,g:r.g,u:r.u,range:r.range.ok,plain:r.plain.ok,pre:r.pre.ok,url:r.range.url||r.plain.url||"",err:r.range.err||""};})); return; } document.getElementById("sum").textContent="running "+(i+1)+"/"+IDS.length; one(IDS[i]).then(function(){ seq(i+1); }); })(0);
+</script></body></html>
