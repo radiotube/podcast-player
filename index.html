@@ -145,6 +145,8 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .player .info{text-align:center;display:flex;flex-direction:column;gap:2px;margin:0 auto;max-width:560px;width:100%}
 .player .info .t{font:700 19px/1.25 var(--display);text-wrap:balance}
 .player .info .s{color:var(--muted);font-size:15px}
+.player .trim-info{color:var(--accent);font-size:13px;margin-top:2px}
+.player .trim-info.off{color:var(--muted)}
 .scrub{width:100%;max-width:560px;margin:14px auto 0}
 .scrub input{width:100%;accent-color:var(--accent);height:28px}
 .scrub .times{display:flex;justify-content:space-between;font:13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
@@ -253,7 +255,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     <audio id="audio" preload="metadata"></audio>
     <div class="tx-box" id="txBox" aria-label="Transcript"></div>
   </div>
-  <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div></div>
+  <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div><div class="trim-info" id="trimInfo" hidden></div></div>
   <div class="scrub">
     <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Position">
     <div class="times"><span id="tCur">0:00</span><span id="tLeft">-0:00</span></div>
@@ -295,10 +297,12 @@ var ICON = {
   chev:'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>'
 };
 var SKIP_EDGE = [0,10,15,20,30,45,60,90,120,180];
+// Shows that start with pause trimming off: music, drama and fiction (Apple's genres), and old time radio.
+var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]time radio|\bOTR\b|radio drama|audio drama/i;
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", unf:{}, keep:{}, newest:{}, quietAt:0};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0};}
 var S = load();
 function load(){
   var s = null;
@@ -810,10 +814,25 @@ function showSettings(sh){
     el("div",{class:"field"},[ el("span",{text:"Subjects (tap to add or remove)"}), chips, newInp ]),
     el("div",{class:"form-grid"},[
       el("label",{class:"field", for:"skipStartSel"},[ "Skip at start", edgeSel("skipStartSel","skipStart") ]),
-      el("label",{class:"field", for:"skipEndSel"},[ "Skip at end", edgeSel("skipEndSel","skipEnd") ])
+      el("label",{class:"field", for:"skipEndSel"},[ "Skip at end", edgeSel("skipEndSel","skipEnd") ]),
+      el("label",{class:"field", for:"showTrimSel"},[ "Trim long pauses", showTrimSel(sh) ])
     ]),
-    el("p",{text:"Use the skip settings to jump past this show's opening and closing ads or intros. Ads that the show marks in its chapters are skipped automatically."})
+    el("p",{text:"Use the skip settings to jump past this show's opening and closing ads or intros. Ads that the show marks in its chapters are skipped automatically."}),
+    showTrimNote(sh)
   ]);
+}
+/* Per-show pause trimming: follow Settings (off for music, drama and fiction), or always on or off for this show. */
+function showTrimSel(sh){
+  var autoText = function(){ return "Same as Settings ("+(!S.trim ? "off" : isMusicShow(sh) ? "off, music or drama" : "on")+")"; };
+  var auto = el("option",{value:"", text:autoText(), selected:!trimMode(sh)});
+  var s = el("select",{id:"showTrimSel"},[ auto, el("option",{value:"on", text:"On for this show", selected:trimMode(sh)==="on"}), el("option",{value:"off", text:"Off for this show", selected:trimMode(sh)==="off"}) ]);
+  s.onchange = function(){ if(this.value) sh.trim = this.value; else delete sh.trim; save(); if(cur && cur.s===sh.id) trimStart(); };
+  needGenre(sh).then(function(){ auto.textContent = autoText(); });
+  return s;
+}
+function showTrimNote(sh){
+  var r = (S.trimRes||{})[sh.id];
+  return r ? el("p",{class:"status", text:TRIM_MSG[r]}) : document.createTextNode("");
 }
 function unfollow(sh){
   dropShow(sh); save(); toast("Unfollowed "+sh.title); go({tab:"home"});
@@ -1163,6 +1182,19 @@ function renderSettings(top, view){
     ]),
     el("p",{text:"Each show also has its own Skip at start and Skip at end setting on its page."})
   ]));
+  var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
+  trimSel.onchange = function(){ S.trim = this.value==="1"; save(); trimStart(); };
+  var minSel = el("select",{id:"trimMinSel"}, TRIM_MINS.map(function(v){ return el("option",{value:String(v), text:v+" sec", selected:v===(S.trimMin||1)}); }));
+  minSel.onchange = function(){ S.trimMin = parseFloat(this.value)||1; save(); };
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Trim long pauses"}),
+    el("div",{class:"form-grid"},[
+      el("label",{class:"field", for:"trimSel"},[ "Trim pauses in speech", trimSel ]),
+      el("label",{class:"field", for:"trimMinSel"},[ "Pauses longer than", minSel ])
+    ]),
+    el("p",{text:"Long pauses are cut down to about half a second. Shows that Apple lists as music, drama or fiction, and old time radio shows, stay as they are unless you switch them on on the show's page. Each show's page can also turn it on or off just for that show."}),
+    el("p",{text:"It only works on MP3 episodes from podcast hosts that let the player read the audio, so some shows can't use it. The player says so on the Now Playing screen. It reads each episode a second time, a few minutes ahead of where you are, so it uses about twice the data."})
+  ]));
 
   view.appendChild(syncCard());
 
@@ -1320,7 +1352,7 @@ function playEp(e, autoplay){
   if($("player").classList.contains("tx")) loadTranscript(cur);
   fillNowPlaying();
   if(autoplay){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); openPlayer(); }
-  setMediaSession();
+  setMediaSession();  trimStart();
 }
 function loadChapters(c){
   fetch(c.ch).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
@@ -1404,6 +1436,7 @@ function onTime(){
   if(S.adSkip && ads.length && !media.paused){
     for(var i=0;i<ads.length;i++){ var a = ads[i]; var end = a.e || d; if(t >= a.s && t < end-0.5){ try{ media.currentTime = end; }catch(e){} toast("Skipped "+(a.t||"ad")); return; } }
   }
+  trimTick(t);
   var outro = (showOf(cur && cur.s).skipEnd)||0;
   if(outro && d && !endSkipped && !media.paused && t >= d - outro && d > outro + 30){ endSkipped = true; toast("Skipped the last "+fmtSecs(outro)); finishEpisode(); media.pause(); return; }
   $("seek").disabled = !d;
@@ -1440,6 +1473,205 @@ function finishEpisode(){
 });
 document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="hidden") savePos(true); });
 window.addEventListener("pagehide", function(){ savePos(true); });
+
+/* ---------- Trim long pauses ----------
+   Playback never goes through Web Audio, so the lock screen and background play stay as they were.
+   The player reads the same MP3 a second time (only where the show's host allows it), a few minutes
+   ahead of where you are, finds the long quiet stretches, and jumps over most of each one. */
+var TRIM_AHEAD = 300, TRIM_HEAD = 0.3, TRIM_TAIL = 0.2, TRIM_MINS = [0.75,1,1.5,2,3];
+var TRIM_MSG = {
+  blocked:"Can't trim pauses on this show. Its host doesn't let the player read the audio.",
+  format:"Can't trim pauses on this episode. It only works on MP3 episodes.",
+  vbr:"Can't trim pauses on this show. Its episodes use variable bitrate MP3, which the player can't line up exactly.",
+  mismatch:"Can't trim pauses on this episode. The copy the player reads doesn't line up with what's playing, often because of inserted ads.",
+  error:"Pause trimming stopped for this episode. The show's server didn't answer."
+};
+var TR = null, trimTimer = null;
+function isMusicShow(sh){ return MUSIC_RE.test((S.gen && S.gen[sh.id]) || "") || OTR_RE.test(sh.title||""); }
+function trimMode(sh){ return sh && (sh.trim==="on" || sh.trim==="off") ? sh.trim : ""; }
+function trimWanted(sh){ var m = trimMode(sh); return m ? m==="on" : (!!S.trim && !isMusicShow(sh)); }
+/* Apple's genres for a show, kept on this device, so music, drama and fiction shows can start with trimming off. */
+function needGenre(sh){
+  S.gen = S.gen || {};
+  if(!sh || !sh.itunesId || S.gen[sh.id] != null) return Promise.resolve();
+  return jsonp("https://itunes.apple.com/lookup?id="+sh.itunesId).then(function(d){
+    var r = (d.results||[])[0]||{}; S.gen[sh.id] = (r.genres||[r.primaryGenreName||""]).join(", "); save();
+  }, function(){});
+}
+function trimUI(){
+  var box = $("trimInfo"); if(!box) return;
+  if(!TR){ box.hidden = true; return; }
+  box.hidden = false; box.classList.toggle("off", TR.st!=="on" && TR.st!=="start");
+  box.textContent = TRIM_MSG[TR.st] || ("Trimming long pauses" + (TR.saved>=1 ? " · "+fmt(TR.saved)+" saved" : ""));
+}
+function trimStop(){ if(TR){ TR.dead = true; if(TR.ctl) try{ TR.ctl.abort(); }catch(e){} } TR = null; clearTimeout(trimTimer); trimUI(); }
+function trimStart(){
+  trimStop();
+  if(!cur || media===video || cur.v) return;
+  var c = cur, sh = showOf(c.s);
+  needGenre(sh).then(function(){
+    if(cur!==c || !trimWanted(sh)) return;
+    var u = String(c.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
+    TR = {g:c.g, sid:c.s, u:u, url:u, runs:[], cov:[], saved:0, st:"start", tries:0};
+    trimUI(); trimPump();
+  });
+}
+function trimFail(st){ if(!TR) return; TR.st = st; S.trimRes = S.trimRes||{}; if(st==="blocked" || st==="format" || st==="vbr") { S.trimRes[TR.sid] = st; save(); } trimUI(); }
+/* MP3 frame headers (Layer III only). */
+var MP3_BR1 = [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320], MP3_BR2 = [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
+var MP3_SR = {3:[44100,48000,32000], 2:[22050,24000,16000], 0:[11025,12000,8000]};
+function mp3Hdr(b, i){
+  if(i+4 > b.length || b[i]!==0xFF || (b[i+1]&0xE0)!==0xE0) return null;
+  var ver = (b[i+1]>>3)&3, lay = (b[i+1]>>1)&3; if(ver===1 || lay!==1) return null;
+  var bi = b[i+2]>>4, si = (b[i+2]>>2)&3, pad = (b[i+2]>>1)&1; if(bi===0 || bi===15 || si===3) return null;
+  var br = (ver===3?MP3_BR1:MP3_BR2)[bi], sr = MP3_SR[ver][si];
+  return {len:Math.floor((ver===3?144:72)*br*1000/sr)+pad, spf:ver===3?1152:576, sr:sr, br:br, ver:ver, mono:(b[i+3]>>6)===3};
+}
+/* Offsets of whole frames in b, starting at the first spot where three frames in a row line up. */
+function mp3Frames(b, from){
+  var i = from||0, out = [];
+  for(; i+4 < b.length; i++){
+    var h = mp3Hdr(b,i); if(!h) continue;
+    var h2 = mp3Hdr(b, i+h.len); if(!h2 && i+h.len+4 <= b.length) continue;
+    if(h2){ var h3 = mp3Hdr(b, i+h.len+h2.len); if(!h3 && i+h.len+h2.len+4 <= b.length) continue; }
+    break;
+  }
+  while(i+4 <= b.length){ var f = mp3Hdr(b,i); if(!f || i+f.len > b.length) break; out.push(i); i += f.len; }
+  return out;
+}
+function trimFetch(start, len){
+  var ctl = new AbortController(); TR.ctl = ctl;
+  var to = setTimeout(function(){ ctl.abort(); }, 30000);
+  return fetch(TR.url, {mode:"cors", headers:{Range:"bytes="+start+"-"+(start+len-1)}, signal:ctl.signal}).then(function(r){
+    if(r.status!==206){ ctl.abort(); clearTimeout(to); var e = new Error(r.status===200 ? "norange" : "http"); e.http = r.status; throw e; }
+    var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||""); var total = m ? +m[1] : 0;
+    var finalUrl = r.url;
+    return r.arrayBuffer().then(function(ab){ clearTimeout(to); return {b:new Uint8Array(ab), total:total, url:finalUrl}; });
+  }, function(e){ clearTimeout(to); throw e; });
+}
+function trimDecode(bytes){
+  if(!TR.ctx){ var C = window.OfflineAudioContext || window.webkitOfflineAudioContext; if(!C) return Promise.reject(new Error("noaudio")); TR.ctx = new C(1, 1, 22050); }
+  var ctx = TR.ctx, buf = bytes.slice().buffer;
+  return new Promise(function(res, rej){ var p = ctx.decodeAudioData(buf, res, rej); if(p && p.then) p.then(res, rej); });
+}
+/* Reads the file header: where the audio starts, its bitrate, and how long the file says it is. */
+function trimProbe(){
+  return trimFetch(0, 262144).then(function(x){
+    if(x.url) TR.url = x.url; TR.cr = x.total;
+    var b = x.b, start = 0;
+    if(b[0]===0x49 && b[1]===0x44 && b[2]===0x33) start = 10 + ((b[6]&127)<<21|(b[7]&127)<<14|(b[8]&127)<<7|(b[9]&127)) + ((b[5]&16)?10:0);
+    var more = start+8192 > b.length ? trimFetch(start, 65536).then(function(y){ return {b:y.b, at:start}; }) : Promise.resolve({b:b.subarray(start), at:start});
+    return more.then(function(z){
+      var fr = mp3Frames(z.b, 0); if(fr.length < 3) throw new Error("format", {cause:"frames "+z.at+" "+z.b.length});
+      var h = mp3Hdr(z.b, fr[0]), first = z.b.subarray(fr[0], fr[0]+h.len), tag = "", o = 0;
+      for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = s; o = i; break; } }
+      var cbr = fr.slice(1, 40).every(function(o){ return mp3Hdr(z.b,o).br===h.br; });
+      if(tag==="Xing" || tag==="VBRI" || !cbr) throw new Error("vbr", {cause:tag+" "+cbr});
+      var audio = z.at + fr[0] + (tag ? h.len : 0), bps = h.br*125, dur = 0;
+      if(TR.cr) dur = (TR.cr - audio)/bps;
+      // An Info tag's frame count gives the exact length.
+      else if(tag==="Info" && (first[o+7]&1)) dur = ((first[o+8]<<24|first[o+9]<<16|first[o+10]<<8|first[o+11])>>>0)*h.spf/h.sr;
+      TR.audio = audio; TR.h = h; TR.bps = bps; TR.fileDur = dur; TR.total = dur ? Math.ceil(audio + dur*bps) : 0;
+    });
+  });
+}
+/* Most hosts hide the file size from the player, so read the bytes around where the end should be. */
+function trimTail(){
+  var md = media.duration; if(!md || !isFinite(md)) return Promise.resolve("idle");
+  var E = Math.round(TR.audio + md*TR.bps), W = Math.max(32768, Math.round(4*TR.bps));
+  return trimFetch(E - W, 2*W).then(function(x){
+    if(x.b.length >= 2*W) throw new Error("mismatch");
+    TR.fileDur = (E - W + x.b.length - TR.audio)/TR.bps; TR.total = E - W + x.b.length;
+  }, function(e){ if(e && e.http===416) throw new Error("mismatch"); throw e; });
+}
+function trimLenOk(){
+  var md = media.duration; if(!md || !isFinite(md)) return null;
+  return Math.abs(md - TR.fileDur) <= Math.max(2, md*0.004);
+}
+function trimGap(t){ for(var i=0;i<TR.cov.length;i++){ var c = TR.cov[i]; if(t >= c[0]-0.05 && t < c[1]) t = c[1]; } return t; }
+function trimCover(a, z){
+  TR.cov.push([a,z]); TR.cov.sort(function(p,q){ return p[0]-q[0]; });
+  var out = []; TR.cov.forEach(function(c){ var l = out[out.length-1]; if(l && c[0] <= l[1]+0.05) l[1] = Math.max(l[1], c[1]); else out.push([c[0],c[1]]); }); TR.cov = out;
+}
+function trimPump(){
+  var T = TR; if(!T || T.dead || T.busy || (T.st!=="start" && T.st!=="on")) return;
+  T.busy = true;
+  var step = T.h ? Promise.resolve() : trimProbe();
+  step.then(function(){ return T.dead || T.fileDur ? null : trimTail(); }).then(function(w){
+    if(T.dead || w==="idle") return "idle";
+    var ok = trimLenOk(); if(ok===false) throw new Error("mismatch");
+    if(T.st==="start"){ T.st = "on"; if(S.trimRes && S.trimRes[T.sid]){ delete S.trimRes[T.sid]; save(); } trimUI(); }
+    var now = media.currentTime||0, at = trimGap(now);
+    if(at >= T.fileDur - 0.5 || at > now + TRIM_AHEAD) return "idle";
+    var lead = 4*T.h.len, chunk = T.bps*60;
+    var from = Math.max(T.audio, T.audio + Math.floor(at*T.bps) - lead);
+    return trimFetch(from, Math.min(chunk, T.total - from)).then(function(x){
+      if(T.dead) return;
+      if(x.total && T.cr && x.total!==T.cr) throw new Error("mismatch");
+      var fr = mp3Frames(x.b, 0); if(fr.length < 8) throw new Error("format", {cause:"chunk"});
+      var whole = x.b.subarray(fr[0], fr[fr.length-1] + mp3Hdr(x.b, fr[fr.length-1]).len);
+      var t0 = (from + fr[0] - T.audio)/T.bps, span = fr.length*T.h.spf/T.h.sr;
+      return trimDecode(whole).then(function(ab){ if(!T.dead) trimScan(ab, t0, span, t0 > at - 0.05 ? t0 : at); });
+    });
+  }).then(function(r){
+    T.busy = false; T.tries = 0;
+    if(!T.dead && r!=="idle") trimTimer = setTimeout(trimPump, 50);
+  }, function(e){
+    T.busy = false; if(T.dead) return;
+    var m = e && e.message; T.why = String(m)+" "+String(e && e.cause || "")+" "+String(e && e.name || "");
+    if(m==="format" || m==="noaudio") return trimFail("format");
+    if(m==="mismatch" || m==="vbr") return trimFail(m);
+    var slow = e && e.name==="AbortError";
+    if(m==="norange") return trimFail("blocked");
+    if(!T.h && !slow) return trimFail(e && e.http ? "error" : "blocked");
+    // A signed address can run out while an episode sits paused; go back through the show's own link.
+    if(e && e.http && T.url!==T.u) T.url = T.u;
+    if(++T.tries > 3) return trimFail("error");
+    trimTimer = setTimeout(trimPump, 15000);
+  });
+}
+/* Finds quiet stretches in a decoded chunk. The threshold follows the recording's own noise floor. */
+function trimScan(ab, t0, span, keepFrom){
+  var d = ab.getChannelData(0), sr = ab.sampleRate, w = Math.round(sr*0.03), dbs = [];
+  for(var i=0;i+w<=d.length;i+=w){ var s = 0; for(var j=i;j<i+w;j++) s += d[j]*d[j]; dbs.push(10*Math.log10(s/w + 1e-12)); }
+  if(!dbs.length) return;
+  var sorted = dbs.slice().sort(function(a,b){ return a-b; }), floor = sorted[Math.floor(sorted.length*0.15)];
+  var thr = Math.max(-50, Math.min(-36, floor + 10));
+  var scale = span / (d.length/sr), from = Math.max(keepFrom, t0 + 0.1), end = t0 + Math.min(span, d.length/sr*scale);
+  var run = null, add = function(a, z){ if(z - a >= 0.6) TR.runs.push({s:a, e:z}); };
+  var open = TR.open && Math.abs(TR.open.at - from) < 0.15 ? TR.open.s : null;
+  for(var k=0;k<dbs.length;k++){
+    var t = t0 + k*w/sr*scale; if(t < from) continue;
+    if(dbs[k] < thr){ if(run===null) run = open!==null ? open : t; }
+    else { if(run!==null) add(run, t); run = null; }
+    open = null;
+  }
+  TR.open = run!==null ? {s:run, at:end} : null;
+  TR.runs.sort(function(a,b){ return a.s-b.s; });
+  trimCover(from, end);
+}
+function trimBuffered(t){ var b = media.buffered; for(var i=0;i<b.length;i++){ if(t >= b.start(i) && t <= b.end(i) - 0.3) return true; } return false; }
+/* Called as playback moves: jumps over the middle of a long pause, keeping a short pause each side. */
+function trimTick(t){
+  var T = TR; if(!T || T.st!=="on" || T.g!==(cur&&cur.g) || media.paused || seeking) return;
+  var min = S.trimMin||1;
+  for(var i=0;i<T.runs.length;i++){
+    var r = T.runs[i]; if(r.s > t + 2) break;
+    if(r.e - r.s < min) continue;
+    if(t >= r.s + TRIM_HEAD - 0.05 && t < r.e - TRIM_TAIL - 0.25){
+      var to = r.e - TRIM_TAIL; if(!trimBuffered(to)) return;
+      progSeek = true; try{ media.currentTime = to; T.saved += to - t; trimUI(); }catch(e){ progSeek = false; }
+      return;
+    }
+    // A pause about to start: check again right when it does, between the player's own updates.
+    if(r.s + TRIM_HEAD > t && r.s + TRIM_HEAD - t < 1){ clearTimeout(T.soon); T.soon = setTimeout(function(){ trimTick(media.currentTime||0); }, (r.s + TRIM_HEAD - t)/(media.playbackRate||1)*1000 + 20); }
+  }
+  if(!T.busy && Date.now() - (T.lastPump||0) > 4000){ T.lastPump = Date.now(); trimPump(); }
+}
+[audio, video].forEach(function(m){
+  m.addEventListener("seeked", function(){ if(m===media && TR && !TR.busy) trimPump(); });
+  m.addEventListener("loadedmetadata", function(){ if(m!==media || !TR) return; if(TR.st==="on" && trimLenOk()===false) trimFail("mismatch"); else trimPump(); });
+});
 
 function setMediaSession(){
   if(!("mediaSession" in navigator) || !cur) return;
@@ -1713,7 +1945,7 @@ function dbxUpload(data, rev, keepalive){
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
   return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
-    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort}};
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
 function stable(v){
@@ -1779,7 +2011,7 @@ function mergeSync(base, local, remote, fresh){
   [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip","epSort"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
@@ -1795,7 +2027,7 @@ function applyMerged(m){
   var prefsBefore = stable(snap().prefs);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
   normAll(S.subs);
-  ["speed","skipBack","skipFwd","adSkip","epSort"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
   if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){
