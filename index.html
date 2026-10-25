@@ -189,6 +189,22 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .cue .who{display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
 .tx-msg{padding:16px;color:var(--muted);font-size:15px}
 .tx-msg a{color:var(--accent)}
+
+/* Episode tabs, sort and listened marks */
+.ep-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg{display:flex;flex:1 1 220px;background:var(--surface);border-radius:12px;padding:3px;gap:3px}
+.seg button{flex:1;border:0;background:none;border-radius:9px;padding:8px 10px;min-height:40px;font-size:15px;font-weight:600;color:var(--muted);white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--fg)}
+.ep-info{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px}
+.ep-acts{display:flex;align-items:center;gap:2px}
+.mark{color:var(--muted)}
+.mark.on{color:var(--good)}
+.badge.new{background:var(--accent);color:var(--accent-ink)}
+.badge.heard{background:var(--surface-2);color:var(--muted)}
+.chips.wrap{flex-wrap:wrap;overflow:visible}
+.chip.caught{opacity:.5}
+.chip.caught[aria-pressed="true"]{opacity:1}
+.empty .btn{display:block}
 </style>
 </head>
 <body>
@@ -250,7 +266,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 <script>
 (function(){
 "use strict";
-var NEWSLINE = {id:"it:546373540", itunesId:546373540, piId:555292, title:"Amateur Radio Newsline", author:"AR Newsline Staff", feedUrl:"https://www.arnewsline.org/?format=rss", art:"https://is1-ssl.mzstatic.com/image/thumb/Podcasts115/v4/30/4a/2b/304a2bf1-5a78-0250-c9d7-245293b42a2a/mza_14080585935704428882.png/600x600bb.jpg", cat:"Ham Radio"};
+var NEWSLINE = {id:"it:546373540", itunesId:546373540, piId:555292, title:"Amateur Radio Newsline", author:"AR Newsline Staff", feedUrl:"https://www.arnewsline.org/?format=rss", art:"https://is1-ssl.mzstatic.com/image/thumb/Podcasts115/v4/30/4a/2b/304a2bf1-5a78-0250-c9d7-245293b42a2a/mza_14080585935704428882.png/600x600bb.jpg", cats:["Ham Radio"]};
 var KEY = "pp.v1";
 var ICON = {
   play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>',
@@ -261,13 +277,14 @@ var ICON = {
   star:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
   starOn:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
   x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
   chev:'<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>'
 };
 var SKIP_EDGE = [0,10,15,20,30,45,60,90,120,180];
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent"};}
 var S = load();
 function load(){
   var s = null;
@@ -276,7 +293,28 @@ function load(){
   var b = blank(); for(var k in b){ if(!(k in s)) s[k] = b[k]; }
   if(!s.seeded){ s.subs[NEWSLINE.id] = NEWSLINE; if(s.fav.indexOf(NEWSLINE.id)<0) s.fav.unshift(NEWSLINE.id); s.seeded = true; }
   s.fav = s.fav.filter(function(id){return s.subs[id];});
+  normAll(s.subs);
   return s;
+}
+/* A show can sit under several subjects (cats). Copies from before that kept one subject in cat,
+   and a device still on the old version can send one back through Dropbox, so fold it in. */
+function normCats(sh){
+  if(!sh) return sh;
+  var out = [], add = function(c){ c = String(c||"").trim(); if(c && out.indexOf(c)<0) out.push(c); };
+  if(Array.isArray(sh.cats)) sh.cats.forEach(add);
+  if(typeof sh.cat==="string") add(sh.cat);
+  delete sh.cat;
+  if(out.length) sh.cats = out; else delete sh.cats;
+  return sh;
+}
+function normAll(subs){ Object.keys(subs||{}).forEach(function(id){ normCats(subs[id]); }); }
+function catsOf(sh){ return (sh && Array.isArray(sh.cats)) ? sh.cats : []; }
+/* Played holds when it was marked: a positive time for played, a negative one for marked not played,
+   so marking an episode not played on one device carries over to the others. */
+function isPlayed(g){ var v = S.played[g]; return v===true || +v > 0; }
+function setPlayed(g, on){
+  S.played[g] = on ? Date.now() : -Date.now();
+  if(on){ delete S.pos[g]; S.posT[g] = Date.now(); }
 }
 var saveT = null;
 function save(now, quiet){
@@ -318,8 +356,17 @@ function normUrl(u){ return String(u||"").trim().toLowerCase().replace(/^https?:
 function bigArt(u){ return u ? String(u).replace(/\/\d+x\d+bb\./, "/600x600bb.") : ""; }
 function isVideo(type, url){ if(type && /video|mpegurl/i.test(type)) return true; return /\.(mp4|m4v|mov|webm|m3u8)(\?|#|$)/i.test(url||""); }
 function subjects(){
-  var set = {}; Object.keys(S.subs).forEach(function(id){ var c = S.subs[id].cat; if(c) set[c] = 1; });
+  var set = {}; Object.keys(S.subs).forEach(function(id){ catsOf(S.subs[id]).forEach(function(c){ set[c] = 1; }); });
   return Object.keys(set).sort(function(a,b){return a.localeCompare(b);});
+}
+/* Episodes in a show's list not yet finished (partly played ones count). null until the list has loaded once. */
+function unheard(sh){
+  var c = S.cache[sh.id]; if(!c || !c.eps) return null;
+  return c.eps.filter(function(e){ return !isPlayed(e.g); });
+}
+function byDate(list, oldFirst){
+  return list.map(function(e, i){ return {e:e, i:i, t:new Date(e.d).getTime()||0}; })
+    .sort(function(a,b){ return (oldFirst ? a.t-b.t : b.t-a.t) || (oldFirst ? b.i-a.i : a.i-b.i); }).map(function(x){ return x.e; });
 }
 
 /* Apple's podcast directory, called with JSONP so no CORS setup or key is needed. */
@@ -456,12 +503,30 @@ function renderHome(top, view){
 
   var subs = subjects();
   if(filterCat && subs.indexOf(filterCat)<0 && filterCat!=="-") filterCat = "";
-  var inCat = function(sh){ return !filterCat || (filterCat==="-" ? !sh.cat : sh.cat===filterCat); };
+  var memberOf = function(sh, c){ var cs = catsOf(sh); return c==="-" ? !cs.length : cs.indexOf(c)>=0; };
+  // In a subject, only shows with something left to hear, unless asked to show them all.
+  // A show whose episode list hasn't loaded yet stays until it's checked.
+  var leftToHear = function(sh){ var u = unheard(sh); return u===null || u.length>0; };
+  var inCat = function(sh){ return !filterCat || (memberOf(sh, filterCat) && (showCaughtUp || leftToHear(sh))); };
   if(subs.length && !arranging){
     var chips = el("div",{class:"chips", role:"group", "aria-label":"Filter by subject"});
-    var mk = function(label, val){ chips.appendChild(el("button",{class:"chip", "aria-pressed":String(filterCat===val), text:label, onclick:function(){ filterCat = val; render(); }})); };
+    var mk = function(label, val){
+      var members = val ? Object.keys(S.subs).map(function(id){ return S.subs[id]; }).filter(function(sh){ return memberOf(sh, val); }) : [];
+      var done = val && members.length && members.every(function(sh){ var u = unheard(sh); return u!==null && !u.length; });
+      chips.appendChild(el("button",{class:"chip"+(done?" caught":""), "aria-pressed":String(filterCat===val), "aria-label": done ? label+", all caught up" : null, text:label, onclick:function(){ filterCat = val; showCaughtUp = false; render(); }}));
+    };
     mk("All", ""); subs.forEach(function(c){ mk(c, c); }); mk("No subject", "-");
     view.appendChild(chips);
+  }
+  if(filterCat && !arranging) checkCat(filterCat, memberOf);
+  var hiddenN = filterCat ? Object.keys(S.subs).filter(function(id){ var sh = S.subs[id]; return memberOf(sh, filterCat) && !leftToHear(sh); }).length : 0;
+  var catName = filterCat==="-" ? "No subject" : filterCat;
+  if(filterCat && !arranging && !showCaughtUp && hiddenN && hiddenN===Object.keys(S.subs).filter(function(id){ return memberOf(S.subs[id], filterCat); }).length){
+    view.appendChild(el("div",{class:"empty"},[
+      el("p",{style:"margin:0 0 12px", text:"All caught up in "+catName+". Every episode of its "+hiddenN+" show"+(hiddenN===1?"":"s")+" has been played."}),
+      el("button",{class:"btn secondary", style:"align-self:center;margin:0 auto", text:"Show them anyway", onclick:function(){ showCaughtUp = true; render(); }})
+    ]));
+    return;
   }
 
   var favSec = el("section");
@@ -470,7 +535,7 @@ function renderHome(top, view){
   if(!S.fav.length){
     favSec.appendChild(el("p",{class:"empty", text:"Tap the star on any show to add it here. Favorites stay in the order you set with Arrange."}));
   } else if(!favIds.length){
-    favSec.appendChild(el("p",{class:"note", text:"No favorites in this subject."}));
+    favSec.appendChild(el("p",{class:"note", text: filterCat && !showCaughtUp ? "No favorites with something left to hear here." : "No favorites in this subject."}));
   } else {
     var ul = el("ul",{class:"fav-list", id:"favList"});
     favIds.forEach(function(id){ ul.appendChild(favRow(S.subs[id], S.fav.indexOf(id))); });
@@ -485,17 +550,43 @@ function renderHome(top, view){
   var oSec = el("section");
   oSec.appendChild(el("h2",{class:"section-label", text:"Other subscriptions"}));
   if(!others.length){
-    oSec.appendChild(el("p",{class:"note", text: filterCat ? "Nothing else in this subject." : "Shows you follow without starring land here, grouped by subject. Find shows in Search, or bring your Overcast list over in Settings."}));
+    oSec.appendChild(el("p",{class:"note", text: filterCat ? (showCaughtUp ? "Nothing else in this subject." : "Nothing else with something left to hear here.") : "Shows you follow without starring land here, grouped by subject. Find shows in Search, or bring your Overcast list over in Settings."}));
   } else if(filterCat || !subs.length){
-    var ol = el("ul",{class:"show-list"}); others.forEach(function(sh){ ol.appendChild(showRow(sh)); }); oSec.appendChild(ol);
+    var ol = el("ul",{class:"show-list"}); others.forEach(function(sh){ ol.appendChild(showRow(sh, !!filterCat)); }); oSec.appendChild(ol);
   } else {
+    // A show under two subjects appears in both groups.
     subs.concat([""]).forEach(function(c){
-      var group = others.filter(function(sh){ return (sh.cat||"")===c; }); if(!group.length) return;
+      var group = others.filter(function(sh){ return c ? catsOf(sh).indexOf(c)>=0 : !catsOf(sh).length; }); if(!group.length) return;
       oSec.appendChild(el("h3",{class:"group-label", text:c||"No subject"}));
       var gl = el("ul",{class:"show-list"}); group.forEach(function(sh){ gl.appendChild(showRow(sh)); }); oSec.appendChild(gl);
     });
   }
   view.appendChild(oSec);
+  if(filterCat && hiddenN){
+    view.appendChild(el("button",{class:"btn secondary", text: showCaughtUp ? "Hide caught-up shows" : "Show "+hiddenN+" caught-up show"+(hiddenN===1?"":"s")+" too", onclick:function(){ showCaughtUp = !showCaughtUp; render(); }}));
+  }
+}
+/* Load episode lists for a subject's shows that have none yet, a few at a time, and redraw
+   Home once if that changes which shows have something left to hear. */
+var showCaughtUp = false, catQueue = [], catRunning = 0, catRedraw = null;
+function catSig(){ return Object.keys(S.subs).sort().map(function(id){ var u = unheard(S.subs[id]); return id+":"+(u===null ? "?" : u.length ? 1 : 0); }).join("|"); }
+function checkCat(c, memberOf){
+  Object.keys(S.subs).forEach(function(id){
+    var sh = S.subs[id], ch = S.cache[id];
+    if(!memberOf(sh, c) || (ch && Date.now()-ch.at < 30*60*1000) || inflight[id] || catQueue.indexOf(id)>=0) return;
+    catQueue.push(id);
+  });
+  pumpCat();
+}
+function pumpCat(){
+  while(catRunning < 4 && catQueue.length){
+    var sh = S.subs[catQueue.shift()]; if(!sh) continue;
+    var before = catSig(); catRunning++;
+    episodesFor(sh).catch(function(){}).then((function(b){ return function(){
+      catRunning--; pumpCat();
+      if(catSig()!==b){ clearTimeout(catRedraw); catRedraw = setTimeout(function(){ if(route.tab==="home" && !route.show && !arranging && filterCat){ var st = $("scroller").scrollTop; render(); $("scroller").scrollTop = st; } }, 400); }
+    }; })(before));
+  }
 }
 function favRow(sh, i){
   var cached = S.cache[sh.id] && S.cache[sh.id].eps[0];
@@ -504,7 +595,7 @@ function favRow(sh, i){
   var li = el("li",{class:"fav", "data-id":sh.id},[
     el("span",{class:"rank", text:String(i+1)}),
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
-    el("div",{class:"meta"},[ sh.cat? el("div",{class:"subj", text:sh.cat}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id, fresh:true}); }}), latest ]),
+    el("div",{class:"meta"},[ catsOf(sh).length? el("div",{class:"subj", text:catsOf(sh).join(" · ")}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id, fresh:true}); }}), latest ]),
     play,
     el("div",{class:"arrange-tools"},[
       el("button",{class:"icon-btn", "aria-label":"Move "+sh.title+" up", html:ICON.up, disabled:i===0, onclick:function(){ moveFav(i,i-1); }}),
@@ -515,7 +606,7 @@ function favRow(sh, i){
   if(!arranging) episodesFor(sh).then(function(eps){
     var e = eps[0];
     if(!e){ latest.textContent = "No episodes found"; return; }
-    latest.innerHTML = ""; latest.appendChild(el("b",{text:e.t})); latest.appendChild(document.createTextNode(" · "+fmtDate(e.d)+(e.v?" · Video":"")+(S.played[e.g]?" · Played":"")));
+    latest.innerHTML = ""; latest.appendChild(el("b",{text:e.t})); latest.appendChild(document.createTextNode(" · "+fmtDate(e.d)+(e.v?" · Video":"")+(isPlayed(e.g)?" · Played":"")));
     play.disabled = false; play.onclick = function(){ playEp(e, true); };
   }, function(){ latest.textContent = "Couldn't load episodes. Check your connection."; });
   return li;
@@ -553,12 +644,16 @@ function enableDrag(list){
     });
   });
 }
-function showRow(sh){
+function showRow(sh, withCount){
   var subbed = !!S.subs[sh.id];
+  var a = el("div",{class:"a"});
+  var u = withCount ? unheard(sh) : null;
+  if(u && u.length) a.appendChild(el("span",{class:"new", text:u.length+" new to me · "}));
+  a.appendChild(document.createTextNode((sh.author||"")+(sh.medium==="video"?" · Video":"")));
   return el("li",{class:"show-row"},[
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
     el("button",{class:"row-link", onclick:function(){ go({tab:route.tab, show:sh.id, temp:subbed?null:sh, fresh:true}); }},[
-      el("div",{class:"t", text:sh.title}), el("div",{class:"a", text:(sh.author||"")+(sh.medium==="video"?" · Video":"")})
+      el("div",{class:"t", text:sh.title}), a
     ]),
     starBtn(sh)
   ]);
@@ -576,7 +671,8 @@ function toggleFav(sh){
 
 /* A show from search or Suggested becomes a subscription; a suggestion brings its subject along. */
 function adopt(sh){
-  if(sh.sugCat && !sh.cat) sh.cat = sh.sugCat;
+  normCats(sh);
+  if(sh.sugCat && catsOf(sh).indexOf(sh.sugCat)<0) sh.cats = catsOf(sh).concat([sh.sugCat]);
   delete sh.sugCat; delete sh.genre; delete sh.last; delete sh.n;
   S.subs[sh.id] = sh; return sh;
 }
@@ -594,7 +690,7 @@ function renderShow(top, view, id){
   var actions = el("div",{class:"show-actions"},[
     el("button",{class:"pill-btn"+(fav?" on":""), text:fav?"★ Favorite":"☆ Favorite", onclick:function(){ toggleFav(sh); render(); }}),
     subbed ? el("button",{class:"pill-btn", text:"Unfollow", onclick:function(){ unfollow(sh); }})
-           : el("button",{class:"pill-btn", text:"Follow", onclick:function(){ adopt(sh); save(); toast("Following "+sh.title+(sh.cat?" under "+sh.cat:"")); render(); }})
+           : el("button",{class:"pill-btn", text:"Follow", onclick:function(){ adopt(sh); save(); toast("Following "+sh.title+(catsOf(sh).length?" under "+catsOf(sh).join(" and "):"")); render(); }})
   ]);
   view.appendChild(el("div",{class:"show-head"},[ el("img",{src:sh.art||"", alt:""}), el("div",null,[ el("h2",{text:sh.title}), el("p",{class:"a", text:sh.author||""}), actions ]) ]));
   if(subbed) view.appendChild(showSettings(sh));
@@ -604,28 +700,71 @@ function renderShow(top, view, id){
   episodesFor(sh, fresh).then(function(eps){
     listWrap.innerHTML = "";
     if(!eps.length){ listWrap.appendChild(el("p",{class:"empty", text:"No episodes found for this show."})); return; }
-    var n = eps.filter(function(e){return e.v;}).length;
-    listWrap.appendChild(el("h2",{class:"section-label", text:eps.length+" recent episodes"+(n? " · "+n+" video":"")}));
-    var ul = el("ul",{class:"eps"}); listWrap.appendChild(ul);
-    var shown = 0;
-    var more = el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show more episodes", onclick:function(){ addEps(20); }});
-    function addEps(n){ eps.slice(shown, shown+n).forEach(function(e){ ul.appendChild(epRow(e, sh)); }); shown += n; more.hidden = shown >= eps.length; }
-    listWrap.appendChild(more); addEps(20);
+    drawEps(listWrap, eps, sh, 20, false);
   }, function(){
     listWrap.innerHTML = "";
     listWrap.appendChild(el("p",{class:"empty", text: sh.itunesId || hasPI() ? "Couldn't reach the podcast directory. Check your connection and try again." : "This show isn't in Apple's directory and its feed doesn't let web apps read it. Adding your Podcast Index key in Settings may fix that."}));
   });
 }
+/* The episode list on a show page: Recent (everything in the list) or New to me (not finished yet),
+   newest or oldest first. Both choices are remembered; the sort order also syncs. */
+function drawEps(wrap, eps, sh, count, keepScroll){
+  var st = $("scroller").scrollTop;
+  wrap.innerHTML = "";
+  var tab = S.epTab==="new" ? "new" : "recent", oldFirst = S.epSort==="old";
+  var fresh = eps.filter(function(e){ return !isPlayed(e.g); });
+  var redraw = function(n){ drawEps(wrap, eps, sh, n || shown, true); };
+  var seg = el("div",{class:"seg", role:"group", "aria-label":"Which episodes"},[
+    el("button",{"aria-pressed":String(tab==="recent"), text:"Recent", onclick:function(){ S.epTab = "recent"; save(); redraw(20); }}),
+    el("button",{"aria-pressed":String(tab==="new"), text:"New to me"+(fresh.length? " ("+fresh.length+")" : ""), onclick:function(){ S.epTab = "new"; save(); redraw(20); }})
+  ]);
+  var sortBtn = el("button",{class:"pill-btn", "aria-label":"Sort order: "+(oldFirst?"oldest":"newest")+" first. Tap to change.", text:(oldFirst?"Oldest":"Newest")+" first ⇅", onclick:function(){ S.epSort = oldFirst ? "new" : "old"; save(); redraw(); }});
+  wrap.appendChild(el("div",{class:"ep-tools"},[ seg, sortBtn ]));
+  var list = byDate(tab==="new" ? fresh : eps, oldFirst);
+  var n = eps.filter(function(e){return e.v;}).length;
+  var info = el("div",{class:"ep-info"});
+  if(tab==="recent"){
+    info.appendChild(el("p",{class:"note", text:eps.length+" recent episodes"+(n? " · "+n+" video":"")+" · "+fresh.length+" new to you"}));
+  } else if(list.length){
+    info.appendChild(el("p",{class:"note", text:list.length+" episode"+(list.length===1?"":"s")+" you haven't finished. Played ones are left out."}));
+    var armed = false;
+    info.appendChild(el("button",{class:"pill-btn", text:"Mark all as played", onclick:function(){
+      if(!armed){ armed = true; this.textContent = "Tap again to mark all "+list.length; var b = this; setTimeout(function(){ if(armed){ armed = false; b.textContent = "Mark all as played"; } }, 4000); return; }
+      list.forEach(function(e){ if(!(cur && cur.g===e.g && !media.paused)) setPlayed(e.g, true); });
+      save(); toast("Marked "+list.length+" as played"); redraw(20);
+    }}));
+  }
+  wrap.appendChild(info);
+  if(!list.length){
+    wrap.appendChild(el("p",{class:"empty", text: tab==="new" ? "You've played every episode in this list. They're all still under Recent." : "No episodes found for this show."}));
+    if(keepScroll) $("scroller").scrollTop = st;
+    return;
+  }
+  var ul = el("ul",{class:"eps"}); wrap.appendChild(ul);
+  var shown = 0;
+  var more = el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show more episodes", onclick:function(){ addEps(20); }});
+  function addEps(k){ list.slice(shown, shown+k).forEach(function(e){ ul.appendChild(epRow(e, sh, tab, function(){ redraw(); })); }); shown += k; more.hidden = shown >= list.length; }
+  wrap.appendChild(more); addEps(Math.max(20, count||0));
+  if(keepScroll) $("scroller").scrollTop = st;
+}
 function showSettings(sh){
   var subs = subjects();
-  var catSel = el("select",{id:"catSel"},[ el("option",{value:"", text:"No subject"}) ]
-    .concat(subs.map(function(c){ return el("option",{value:c, text:c, selected:sh.cat===c}); }))
-    .concat([ el("option",{value:"__new", text:"New subject…"}) ]));
-  var newInp = el("input",{id:"catNew", type:"text", placeholder:"e.g. Ham Radio", hidden:true, maxlength:"30", enterkeyhint:"done"});
-  var commit = function(){ var v = newInp.value.trim(); if(!v) return; sh.cat = v; save(); toast("Subject set to "+v); render(); };
-  catSel.onchange = function(){
-    if(this.value==="__new"){ newInp.hidden = false; newInp.focus(); return; }
-    sh.cat = this.value || ""; if(!sh.cat) delete sh.cat; save(); toast(sh.cat? "Subject set to "+sh.cat : "Subject cleared");
+  // Tap a subject to put the show under it or take it out; a show can be under several.
+  var chips = el("div",{class:"chips wrap", role:"group", "aria-label":"Subjects for this show"});
+  var toggleCat = function(c){
+    var cs = catsOf(sh).slice(), i = cs.indexOf(c);
+    if(i>=0){ cs.splice(i,1); toast("Removed from "+c); } else { cs.push(c); toast("Added to "+c); }
+    sh.cats = cs; normCats(sh); save(); render();
+  };
+  subs.forEach(function(c){ var on = catsOf(sh).indexOf(c)>=0; chips.appendChild(el("button",{class:"chip", "aria-pressed":String(on), text:(on?"✓ ":"")+c, onclick:function(){ toggleCat(c); }})); });
+  var newInp = el("input",{id:"catNew", type:"text", placeholder:"e.g. Ham Radio", hidden:true, maxlength:"30", enterkeyhint:"done", "aria-label":"New subject name"});
+  var addBtn = el("button",{class:"chip", text:"+ New subject", onclick:function(){ newInp.hidden = false; addBtn.hidden = true; newInp.focus(); }});
+  chips.appendChild(addBtn);
+  var commit = function(){
+    var v = newInp.value.trim(); if(!v) return; newInp.value = "";
+    var hit = subs.filter(function(c){ return c.toLowerCase()===v.toLowerCase(); })[0] || v;
+    if(catsOf(sh).indexOf(hit)<0){ sh.cats = catsOf(sh).concat([hit]); normCats(sh); save(); toast("Added to "+hit); }
+    render();
   };
   newInp.addEventListener("keydown", function(e){ if(e.key==="Enter"){ e.preventDefault(); commit(); } });
   newInp.addEventListener("blur", commit);
@@ -635,8 +774,8 @@ function showSettings(sh){
     return s;
   };
   return el("div",{class:"card"},[
+    el("div",{class:"field"},[ el("span",{text:"Subjects (tap to add or remove)"}), chips, newInp ]),
     el("div",{class:"form-grid"},[
-      el("label",{class:"field", for:"catSel"},[ "Subject", catSel, newInp ]),
       el("label",{class:"field", for:"skipStartSel"},[ "Skip at start", edgeSel("skipStartSel","skipStart") ]),
       el("label",{class:"field", for:"skipEndSel"},[ "Skip at end", edgeSel("skipEndSel","skipEnd") ])
     ]),
@@ -646,19 +785,25 @@ function showSettings(sh){
 function unfollow(sh){
   delete S.subs[sh.id]; var i = S.fav.indexOf(sh.id); if(i>=0) S.fav.splice(i,1); delete S.cache[sh.id]; save(); toast("Unfollowed "+sh.title); go({tab:"home"});
 }
-function epRow(e, sh){
-  var pos = S.pos[e.g]||0, played = !!S.played[e.g];
+/* Each row says where you stand with the episode: New (not started), time left (partly played) or Played. */
+function epRow(e, sh, tab, onMark){
+  var pos = S.pos[e.g]||0, played = isPlayed(e.g);
   var len = e.len || (S.pos[e.g+"#len"]||0);
-  var when = el("div",{class:"when"},[ fmtDate(e.d) ]);
+  var when = el("div",{class:"when"});
+  if(played) when.appendChild(el("span",{class:"badge heard", text:"Played"}));
+  else if(pos>5) when.appendChild(el("span",{class:"badge left", text: len ? fmtDur(Math.max(60, len-pos))+" left" : "In progress"}));
+  else if(tab==="recent") when.appendChild(el("span",{class:"badge new", text:"New"}));
+  when.appendChild(document.createTextNode(fmtDate(e.d)));
   if(len) when.appendChild(document.createTextNode("· "+fmtDur(len)));
   if(e.v) when.appendChild(el("span",{class:"badge video", text:"Video"}));
   if(e.tr && e.tr.length) when.appendChild(el("span",{class:"badge done", text:"Transcript"}));
-  if(played) when.appendChild(el("span",{class:"badge done", text:"Played"}));
-  else if(pos>5 && len) when.appendChild(el("span",{class:"badge left", text:fmtDur(len-pos)+" left"}));
   var desc = el("div",{class:"desc", text:e.x||""}); desc.hidden = true;
+  var mark = el("button",{class:"icon-btn plain mark"+(played?" on":""), "aria-pressed":String(played), "aria-label": played ? "Played. Tap to mark "+e.t+" as not played" : "Mark "+e.t+" as played", html:ICON.check, onclick:function(){
+    setPlayed(e.g, !played); save(); toast(played ? "Marked as not played" : "Marked as played"); if(onMark) onMark();
+  }});
   var li = el("li",{class:"ep"+(played?" played":"")},[
     el("div",null,[ when, el("button",{class:"title", text:e.t, "aria-expanded":"false", onclick:function(){ desc.hidden=!desc.hidden; this.setAttribute("aria-expanded", String(!desc.hidden)); }}) ]),
-    el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true); }}),
+    el("div",{class:"ep-acts"},[ mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true); }}) ]),
     desc
   ]);
   if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
@@ -927,7 +1072,7 @@ function backup(){
 function restore(f){
   f.text().then(function(t){
     var d = JSON.parse(t); if(!d || d.app!=="podcast-player") throw new Error("bad");
-    S.subs = d.subs||{}; S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
+    S.subs = d.subs||{}; normAll(S.subs); S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
     S.posT = {}; Object.keys(S.pos).forEach(function(g){ if(!/#len$/.test(g)) S.posT[g] = Date.now(); });
     if(d.skipBack) S.skipBack = d.skipBack; if(d.skipFwd) S.skipFwd = d.skipFwd; if(typeof d.adSkip==="boolean") S.adSkip = d.adSkip; S.cache = {};
     save(true); applySkipLabels(); toast("Backup restored"); go({tab:"home"});
@@ -1370,7 +1515,7 @@ function dbxUpload(data, rev, keepalive){
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
   return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, now:S.now, nowT:S.nowT||0,
-    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip}};
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
 function stable(v){
@@ -1428,10 +1573,11 @@ function mergeSync(base, local, remote, fresh){
     if(Math.max(lt, rt)) out.posT[g] = Math.max(lt, rt);
     var len = Math.max(L.pos[g+"#len"]||0, R.pos[g+"#len"]||0); if(len) out.pos[g+"#len"] = len;
   });
-  [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; out.played[g] = Math.max(out.played[g]||0, t); }); });
+  // Played or marked not played: whichever happened last wins (a negative time means not played).
+  [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  ["speed","skipBack","skipFwd","adSkip","epSort"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
@@ -1446,7 +1592,8 @@ function applyMerged(m){
   var lt = cur ? (S.posT[cur.g]||0) : 0;
   var prefsBefore = stable(snap().prefs);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg;
-  ["speed","skipBack","skipFwd","adSkip"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  normAll(S.subs);
+  ["speed","skipBack","skipFwd","adSkip","epSort"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
   if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){

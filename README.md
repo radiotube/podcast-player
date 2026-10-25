@@ -3,7 +3,8 @@
 A podcast player web app for iPhone and iPad that installs to the Home Screen from Safari.
 
 - Plays audio and video podcasts, with Picture in Picture for video
-- Favorites in the order you set (drag or arrows), plus subjects you name yourself
+- Favorites in the order you set (drag or arrows), plus subjects you name yourself; a show can sit under several subjects, and a subject lists only shows with something left to hear
+- Each show has a Recent tab (every episode, marked New, time left or Played) and a New to me tab (not finished yet), sorted newest or oldest first
 - Search: Podcast Index first (with your own free key, saved on your device), Apple Podcasts second
 - Skip back and forward amounts you choose, per-show skip at start and end, and skipping of ads a show marks in its chapters
 - Transcripts when a show publishes them (Podcasting 2.0), following along as it plays
