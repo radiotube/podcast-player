@@ -1286,6 +1286,7 @@ function renderSettings(top, view){
       el("label",{class:"field", for:"nextSel"},[ "When an episode ends", (function(){ var s = el("select",{id:"nextSel"},[ el("option",{value:"1", text:"Play the next one", selected:S.autoNext!==false}), el("option",{value:"0", text:"Stop", selected:S.autoNext===false}) ]); s.onchange=function(){ S.autoNext = this.value==="1"; save(); }; return s; })() ]),
       el("label",{class:"field", for:"adSel"},[ "Ads marked in chapters", (function(){ var s = el("select",{id:"adSel"},[ el("option",{value:"1", text:"Skip them", selected:S.adSkip}), el("option",{value:"0", text:"Play them", selected:!S.adSkip}) ]); s.onchange=function(){ S.adSkip = this.value==="1"; save(); }; return s; })() ])
     ]),
+    el("p",{id:"remoteNote", text:remoteText()}),
     el("p",{text:"The next one comes from the list you started from. In a subject that's its New to me list, which plays each show's episodes oldest first, then the next show. On a show's page it's that show's next unfinished episode, oldest first. The sleep timer's End of episode setting still stops at the end. Each show also has its own Skip at start and Skip at end setting on its page."})
   ]));
   var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
@@ -1579,7 +1580,7 @@ function finishEpisode(){
 }
 [audio, video].forEach(function(m){
   m.addEventListener("timeupdate", function(){ if(m===media) onTime(); });
-  m.addEventListener("play", function(){ if(m===media){ setPlayIcons(); updatePositionState(); if(cur){ S.now = cur; S.nowT = Date.now(); save(); holdStart(); } } });
+  m.addEventListener("play", function(){ if(m===media){ playT = Date.now(); setPlayIcons(); updatePositionState(); if(cur){ S.now = cur; S.nowT = Date.now(); save(); holdStart(); } } });
   m.addEventListener("playing", function(){ if(m===media && wantAt){ var w = wantAt; wantAt = 0; if(Math.abs((media.currentTime||0) - w) > 3){ progSeek = true; try{ media.currentTime = w; }catch(e){ progSeek = false; } } } });
   m.addEventListener("pause", function(){ if(m===media){ setPlayIcons(); savePos(true); syncNow(); } });
   m.addEventListener("loadedmetadata", function(){ if(m===media){ onTime(); updatePositionState(); } });
@@ -1801,13 +1802,30 @@ function trimTick(t){
   m.addEventListener("loadedmetadata", function(){ if(m!==media || !TR) return; if(TR.st==="on" && trimLenOk()===false) trimFail("mismatch"); else trimPump(); });
 });
 
+/* Headset, AirPods and lock screen buttons. iPhone turns a headset press into "play" or "pause" by
+   its own idea of whether the page is playing, and that can be wrong, so a "play" that arrives while
+   the episode is plainly playing is taken as a pause. The last press is shown in Settings. */
+var playT = 0, remote = null;
+function remoteAct(a){
+  if(!cur) return;
+  var playing = !media.paused && !media.ended, did;
+  if(a==="pause"){ media.pause(); did = playing ? "paused" : "stayed paused"; }
+  else if(playing && Date.now() - playT > 700){ media.pause(); did = "paused, since the episode was already playing"; }
+  else { playT = Date.now(); if(!playing){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); } did = playing ? "kept playing" : "played"; }
+  remote = {a:a, t:Date.now(), did:did};
+  var n = $("remoteNote"); if(n) n.textContent = remoteText();
+}
+function remoteText(){
+  if(!remote) return "Headset and lock screen buttons: no press seen since the app opened.";
+  return "Last headset or lock screen press: "+(remote.a==="play"?"Play":"Pause")+" at "+new Date(remote.t).toLocaleTimeString([], {hour:"numeric", minute:"2-digit", second:"2-digit"})+". The player "+remote.did+".";
+}
 function setMediaSession(){
   if(!("mediaSession" in navigator) || !cur) return;
   try{
     navigator.mediaSession.metadata = new MediaMetadata({title:cur.t, artist:cur.show||"", album:cur.show||"", artwork: cur.a? [{src:cur.a, sizes:"600x600", type:"image/jpeg"}] : []});
     var ms = navigator.mediaSession;
     var set = function(a,f){ try{ ms.setActionHandler(a,f); }catch(e){} };
-    set("play", function(){ media.play(); }); set("pause", function(){ media.pause(); });
+    set("play", function(){ remoteAct("play"); }); set("pause", function(){ remoteAct("pause"); });
     set("seekbackward", function(d){ skip(-((d&&d.seekOffset)||S.skipBack)); }); set("seekforward", function(d){ skip((d&&d.seekOffset)||S.skipFwd); });
     set("seekto", function(d){ if(d && d.seekTime!=null) try{ media.currentTime = d.seekTime; }catch(e){} updatePositionState(); });
     set("previoustrack", null); set("nexttrack", null);
