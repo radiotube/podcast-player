@@ -362,7 +362,7 @@ function subjects(){
 /* Episodes in a show's list not yet finished (partly played ones count). null until the list has loaded once. */
 function unheard(sh){
   var c = S.cache[sh.id]; if(!c || !c.eps) return null;
-  return c.eps.filter(function(e){ return !isPlayed(e.g); });
+  return (c.gs || c.eps.map(function(e){ return e.g; })).filter(function(g){ return !isPlayed(g); });
 }
 function byDate(list, oldFirst){
   return list.map(function(e, i){ return {e:e, i:i, t:new Date(e.d).getTime()||0}; })
@@ -419,7 +419,7 @@ function episodesFor(show, force){
   if(!force && c && Date.now()-c.at < 30*60*1000) return Promise.resolve(c.eps);
   if(inflight[show.id]) return inflight[show.id];
   var p = (hasPI() ? fetchPIEps(show).catch(function(){ return fetchAppleOrRss(show); }) : fetchAppleOrRss(show)).then(function(eps){
-    S.cache[show.id] = {at:Date.now(), eps:eps.slice(0,60)}; save(); delete inflight[show.id]; return eps;
+    S.cache[show.id] = {at:Date.now(), eps:eps.slice(0,60), gs:eps.map(function(e){ return e.g; })}; save(); delete inflight[show.id]; return eps;
   }, function(err){ delete inflight[show.id]; if(c) return c.eps; throw err; });
   inflight[show.id] = p; return p;
 }
@@ -729,7 +729,7 @@ function drawEps(wrap, eps, sh, count, keepScroll){
     info.appendChild(el("p",{class:"note", text:list.length+" episode"+(list.length===1?"":"s")+" you haven't finished. Played ones are left out."}));
     var armed = false;
     info.appendChild(el("button",{class:"pill-btn", text:"Mark all as played", onclick:function(){
-      if(!armed){ armed = true; this.textContent = "Tap again to mark all "+list.length; var b = this; setTimeout(function(){ if(armed){ armed = false; b.textContent = "Mark all as played"; } }, 4000); return; }
+      if(!armed){ armed = true; this.textContent = "Tap again to mark all "+list.length; var b = this; setTimeout(function(){ if(armed){ armed = false; b.textContent = "Mark all as played"; } }, 8000); return; }
       list.forEach(function(e){ if(!(cur && cur.g===e.g && !media.paused)) setPlayed(e.g, true); });
       save(); toast("Marked "+list.length+" as played"); redraw(20);
     }}));
