@@ -806,7 +806,7 @@ function epRow(e, sh, tab, onMark){
   if(played) when.appendChild(el("span",{class:"badge heard", text:"Played"}));
   else if(pos>5) when.appendChild(el("span",{class:"badge left", text: len ? fmtDur(Math.max(60, len-pos))+" left" : "In progress"}));
   else if(tab==="recent") when.appendChild(el("span",{class:"badge new", text:"New"}));
-  when.appendChild(document.createTextNode(fmtDate(e.d)));
+  when.appendChild(el("span",{text:fmtDate(e.d)}));
   if(len) when.appendChild(document.createTextNode("· "+fmtDur(len)));
   if(e.v) when.appendChild(el("span",{class:"badge video", text:"Video"}));
   if(e.tr && e.tr.length) when.appendChild(el("span",{class:"badge done", text:"Transcript"}));
