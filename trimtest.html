@@ -1555,20 +1555,32 @@ function trimDecode(bytes){
 /* Reads the file header: where the audio starts, its bitrate, and how long the file says it is. */
 function trimProbe(){
   return trimFetch(0, 262144).then(function(x){
-    if(x.url) TR.url = x.url; TR.total = x.total;
+    if(x.url) TR.url = x.url; TR.cr = x.total;
     var b = x.b, start = 0;
     if(b[0]===0x49 && b[1]===0x44 && b[2]===0x33) start = 10 + ((b[6]&127)<<21|(b[7]&127)<<14|(b[8]&127)<<7|(b[9]&127)) + ((b[5]&16)?10:0);
     var more = start+8192 > b.length ? trimFetch(start, 65536).then(function(y){ return {b:y.b, at:start}; }) : Promise.resolve({b:b.subarray(start), at:start});
     return more.then(function(z){
       var fr = mp3Frames(z.b, 0); if(fr.length < 3) throw new Error("format", {cause:"frames "+z.at+" "+z.b.length});
-      var h = mp3Hdr(z.b, fr[0]), first = z.b.subarray(fr[0], fr[0]+h.len), tag = "";
-      for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = s; break; } }
+      var h = mp3Hdr(z.b, fr[0]), first = z.b.subarray(fr[0], fr[0]+h.len), tag = "", o = 0;
+      for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = s; o = i; break; } }
       var cbr = fr.slice(1, 40).every(function(o){ return mp3Hdr(z.b,o).br===h.br; });
       if(tag==="Xing" || tag==="VBRI" || !cbr) throw new Error("vbr", {cause:tag+" "+cbr});
-      if(!TR.total) throw new Error("format", {cause:"nototal"});
-      TR.audio = z.at + fr[0] + (tag ? h.len : 0); TR.h = h; TR.bps = h.br*125; TR.fileDur = (TR.total - TR.audio)/TR.bps;
+      var audio = z.at + fr[0] + (tag ? h.len : 0), bps = h.br*125, dur = 0;
+      if(TR.cr) dur = (TR.cr - audio)/bps;
+      // An Info tag's frame count gives the exact length.
+      else if(tag==="Info" && (first[o+7]&1)) dur = ((first[o+8]<<24|first[o+9]<<16|first[o+10]<<8|first[o+11])>>>0)*h.spf/h.sr;
+      TR.audio = audio; TR.h = h; TR.bps = bps; TR.fileDur = dur; TR.total = dur ? Math.ceil(audio + dur*bps) : 0;
     });
   });
+}
+/* Most hosts hide the file size from the player, so read the bytes around where the end should be. */
+function trimTail(){
+  var md = media.duration; if(!md || !isFinite(md)) return Promise.resolve("idle");
+  var E = Math.round(TR.audio + md*TR.bps), W = Math.max(32768, Math.round(4*TR.bps));
+  return trimFetch(E - W, 2*W).then(function(x){
+    if(x.b.length >= 2*W) throw new Error("mismatch");
+    TR.fileDur = (E - W + x.b.length - TR.audio)/TR.bps; TR.total = E - W + x.b.length;
+  }, function(e){ if(e && e.http===416) throw new Error("mismatch"); throw e; });
 }
 function trimLenOk(){
   var md = media.duration; if(!md || !isFinite(md)) return null;
@@ -1583,8 +1595,8 @@ function trimPump(){
   var T = TR; if(!T || T.dead || T.busy || (T.st!=="start" && T.st!=="on")) return;
   T.busy = true;
   var step = T.h ? Promise.resolve() : trimProbe();
-  step.then(function(){
-    if(T.dead) return;
+  step.then(function(){ return T.dead || T.fileDur ? null : trimTail(); }).then(function(w){
+    if(T.dead || w==="idle") return "idle";
     var ok = trimLenOk(); if(ok===false) throw new Error("mismatch");
     if(T.st==="start"){ T.st = "on"; if(S.trimRes && S.trimRes[T.sid]){ delete S.trimRes[T.sid]; save(); } trimUI(); }
     var now = media.currentTime||0, at = trimGap(now);
@@ -1593,7 +1605,7 @@ function trimPump(){
     var from = Math.max(T.audio, T.audio + Math.floor(at*T.bps) - lead);
     return trimFetch(from, Math.min(chunk, T.total - from)).then(function(x){
       if(T.dead) return;
-      if(x.total && x.total!==T.total) throw new Error("mismatch");
+      if(x.total && T.cr && x.total!==T.cr) throw new Error("mismatch");
       var fr = mp3Frames(x.b, 0); if(fr.length < 8) throw new Error("format", {cause:"chunk"});
       var whole = x.b.subarray(fr[0], fr[fr.length-1] + mp3Hdr(x.b, fr[fr.length-1]).len);
       var t0 = (from + fr[0] - T.audio)/T.bps, span = fr.length*T.h.spf/T.h.sr;
@@ -1656,7 +1668,7 @@ function trimTick(t){
 }
 [audio, video].forEach(function(m){
   m.addEventListener("seeked", function(){ if(m===media && TR && !TR.busy) trimPump(); });
-  m.addEventListener("loadedmetadata", function(){ if(m===media && TR && TR.st==="on" && trimLenOk()===false) trimFail("mismatch"); });
+  m.addEventListener("loadedmetadata", function(){ if(m!==media || !TR) return; if(TR.st==="on" && trimLenOk()===false) trimFail("mismatch"); else trimPump(); });
 });
 
 function setMediaSession(){
