@@ -855,9 +855,16 @@ function showTrimSel(sh){
   return s;
 }
 function showTrimNote(sh){
-  var r = (S.trimRes||{})[sh.id];
-  return r ? el("p",{class:"status", text:TRIM_MSG[r]}) : document.createTextNode("");
+  var r = (S.trimRes||{})[sh.id], lines = [];
+  if(sh.trimSv >= 1) lines.push("Trimming pauses has saved you "+savedText(sh.trimSv)+" on this show.");
+  if(r) lines.push(TRIM_MSG[r]);
+  return lines.length ? el("p",{class:"status", text:lines.join(" ")}) : document.createTextNode("");
 }
+function savedText(sec){
+  sec = Math.round(sec); var h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return h ? h+" hr "+m+" min" : m ? m+" min"+(m < 10 && s ? " "+s+" sec" : "") : s+" sec";
+}
+function trimSavedAll(){ var t = 0; Object.keys(S.subs).forEach(function(id){ t += S.subs[id].trimSv||0; }); return t; }
 function unfollow(sh){
   dropShow(sh); save(); toast("Unfollowed "+sh.title); go({tab:"home"});
 }
@@ -1217,7 +1224,8 @@ function renderSettings(top, view){
       el("label",{class:"field", for:"trimMinSel"},[ "Pauses longer than", minSel ])
     ]),
     el("p",{text:"Long pauses are cut down to about half a second. Shows that Apple lists as music, drama or fiction, and old time radio shows, stay as they are unless you switch them on on the show's page. Each show's page can also turn it on or off just for that show."}),
-    el("p",{text:"It only works on MP3 episodes from podcast hosts that let the player read the audio, so some shows can't use it. The player says so on the Now Playing screen. It reads each episode a second time, a few minutes ahead of where you are, so it uses about twice the data."})
+    el("p",{text:"It only works on MP3 episodes from podcast hosts that let the player read the audio, so some shows can't use it. The player says so on the Now Playing screen. It reads each episode a second time, a few minutes ahead of where you are, so it uses about twice the data."}),
+    trimSavedAll() >= 1 ? el("p",{class:"status", text:"Saved so far across all shows: "+savedText(trimSavedAll())+". Each show's page shows its own total."}) : document.createTextNode("")
   ]));
 
   view.appendChild(syncCard());
@@ -1675,6 +1683,11 @@ function trimScan(ab, t0, span, keepFrom){
   trimCover(from, end);
 }
 function trimBuffered(t){ var b = media.buffered; for(var i=0;i<b.length;i++){ if(t >= b.start(i) && t <= b.end(i) - 0.3) return true; } return false; }
+/* Counts listening time saved, for Now Playing and the show's running total (kept with the show, so it syncs). */
+function trimSaved(T, d){
+  T.saved += d; trimUI();
+  var sh = S.subs[T.sid]; if(sh){ sh.trimSv = Math.round(((sh.trimSv||0) + d)*10)/10; save(false, true); }
+}
 /* Called as playback moves: jumps over the middle of a long pause, keeping a short pause each side. */
 function trimTick(t){
   var T = TR; if(!T || T.st!=="on" || T.g!==(cur&&cur.g) || media.paused || seeking) return;
@@ -1684,7 +1697,7 @@ function trimTick(t){
     if(r.e - r.s < min) continue;
     if(t >= r.s + TRIM_HEAD - 0.05 && t < r.e - TRIM_TAIL - 0.25){
       var to = r.e - TRIM_TAIL; if(!trimBuffered(to)) return;
-      progSeek = true; try{ media.currentTime = to; T.saved += to - t; trimUI(); }catch(e){ progSeek = false; }
+      progSeek = true; try{ media.currentTime = to; trimSaved(T, (to - t)/(media.playbackRate||1)); }catch(e){ progSeek = false; }
       return;
     }
     // A pause about to start: check again right when it does, between the player's own updates.
@@ -2111,6 +2124,8 @@ function mergeFields(b, l, r, preferLocal){
   var out = {}, keys = {};
   [b||{}, l, r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = 1; }); });
   Object.keys(keys).forEach(function(k){ var v = pick3((b||{})[k], l[k], r[k], preferLocal); if(v!==undefined) out[k] = copy(v); });
+  // Time saved is a running total, so listening on two devices adds up rather than one side winning.
+  if(l.trimSv || r.trimSv){ var bs = (b && b.trimSv)||0, ls = l.trimSv||0, rs = r.trimSv||0; out.trimSv = b ? Math.max(ls, rs, ls + rs - bs) : Math.max(ls, rs); }
   return out;
 }
 /* base: the copy last seen on Dropbox (null on a device's first sync). local: this device. remote: Dropbox now.
