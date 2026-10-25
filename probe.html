@@ -1,29 +1,14 @@
-<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Probe</title><pre id="o">running…</pre>
+<!doctype html><meta charset="utf-8"><title>Probe</title><pre id="o">running…</pre>
 <script>
-var out = [];
-function show(){ document.getElementById("o").textContent = out.join("\n\n"); }
-function t(name, url, opts){
-  return fetch(url, opts).then(function(r){ return r.text().then(function(b){ out.push(name+": "+r.status+" "+b.slice(0,300)); show(); }); }, function(e){ out.push(name+": THREW "+e); show(); });
-}
-var A = "Bearer sl.fake";
+var out=[]; function show(){ document.getElementById("o").textContent = out.join("\n\n"); }
+function t(name, url, opts){ return fetch(url, opts).then(function(r){ return r.text().then(function(b){ out.push(name+": "+r.status+" "+b.slice(0,250)); show(); }); }, function(e){ out.push(name+": THREW "+e); show(); }); }
+var q = function(o){ return Object.keys(o).map(function(k){ return k+"="+encodeURIComponent(o[k]); }).join("&"); };
 var arg = JSON.stringify({path:"/sync.json"});
 var up = JSON.stringify({path:"/sync.json", mode:{".tag":"add"}, autorename:false, mute:true, strict_conflict:true});
 (async function(){
-  var D="https://content.dropboxapi.com/2/files/download";
-  for (const v of ["Bearer ", "Bearer undefined", "Bearer null", "Bearer [object Object]", "sl.fake", "Bearer  sl.fake", "Bearer sl.fake ", "bearer sl.fake"]) {
-    await t("download auth="+JSON.stringify(v), D, {method:"POST", headers:{Authorization:v, "Dropbox-API-Arg":arg}});
-  }
-  out.push("DONE"); show(); return;
-  await t("download plain", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{Authorization:A, "Dropbox-API-Arg":arg}});
-  await t("download no-store", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{Authorization:A, "Dropbox-API-Arg":arg}, cache:"no-store"});
-  await t("download no-auth no-store", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{"Dropbox-API-Arg":arg}, cache:"no-store"});
-  await t("download no-auth plain", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{"Dropbox-API-Arg":arg}});
-  await t("upload plain", "https://content.dropboxapi.com/2/files/upload", {method:"POST", headers:{Authorization:A, "Dropbox-API-Arg":up, "Content-Type":"application/octet-stream"}, body:"{}"});
-  await t("upload no-store", "https://content.dropboxapi.com/2/files/upload", {method:"POST", headers:{Authorization:A, "Dropbox-API-Arg":up, "Content-Type":"application/octet-stream"}, body:"{}", cache:"no-store"});
-  await t("rpc get_metadata no-store", "https://api.dropboxapi.com/2/files/get_metadata", {method:"POST", headers:{Authorization:A, "Content-Type":"application/json"}, body:arg, cache:"no-store"});
-  await t("rpc account null", "https://api.dropboxapi.com/2/users/get_current_account", {method:"POST", headers:{Authorization:A, "Content-Type":"application/json"}, body:"null"});
-  await t("token refresh bogus", "https://api.dropboxapi.com/oauth2/token", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:"grant_type=refresh_token&refresh_token=bogus&client_id=9yk2nzxp65t5krk"});
+  await t("download url-auth", "https://content.dropboxapi.com/2/files/download?"+q({authorization:"Bearer sl.fake", arg:arg}), {method:"POST"});
+  await t("upload url-auth", "https://content.dropboxapi.com/2/files/upload?"+q({authorization:"Bearer sl.fake", arg:up}), {method:"POST", headers:{"Content-Type":"text/plain; charset=dropbox-cors-hack"}, body:"{}"});
+  await t("rpc url-auth", "https://api.dropboxapi.com/2/files/get_metadata?"+q({authorization:"Bearer sl.fake"}), {method:"POST", headers:{"Content-Type":"text/plain; charset=dropbox-cors-hack"}, body:arg});
   out.push("DONE"); show();
 })();
 </script>
