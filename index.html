@@ -98,6 +98,7 @@ img{max-width:100%;display:block}
 .ep{padding:14px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;align-items:center}
 .ep .when{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-variant-numeric:tabular-nums}
 .ep .title{font-weight:600;background:none;border:0;padding:0;text-align:left}
+.ep .ep-show{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:2px}
 .ep.played .title{color:var(--muted);font-weight:500}
 .ep .desc{grid-column:1/-1;font-size:14px;color:var(--muted);white-space:pre-line;overflow-wrap:anywhere}
 .badge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px;text-transform:uppercase}
@@ -326,7 +327,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps"};}
 var S = load();
 function load(){
   var s = null;
@@ -577,6 +578,15 @@ function renderHome(top, view){
   }
   if(!arranging){ var qb = quietBanner(); if(qb) view.appendChild(qb); }
   if(filterCat && !arranging) checkCat(filterCat, memberOf);
+  // A subject opens on one New to me list of every unfinished episode from its shows; Shows lists the shows as before.
+  if(filterCat && filterCat!=="-" && !arranging){
+    var epView = S.catView!=="shows";
+    view.appendChild(el("div",{class:"seg", role:"group", "aria-label":"Show episodes or shows"},[
+      el("button",{"aria-pressed":String(epView), text:"New to me", onclick:function(){ S.catView = "eps"; save(); render(); }}),
+      el("button",{"aria-pressed":String(!epView), text:"Shows", onclick:function(){ S.catView = "shows"; save(); render(); }})
+    ]));
+    if(epView){ renderTopic(view, filterCat, memberOf); return; }
+  }
   var hiddenN = filterCat ? Object.keys(S.subs).filter(function(id){ var sh = S.subs[id]; return memberOf(sh, filterCat) && !leftToHear(sh); }).length : 0;
   var catName = filterCat==="-" ? "No subject" : filterCat;
   if(filterCat && !arranging && !showCaughtUp && hiddenN && hiddenN===Object.keys(S.subs).filter(function(id){ return memberOf(S.subs[id], filterCat); }).length){
@@ -627,11 +637,11 @@ function renderHome(top, view){
 /* Load episode lists for a subject's shows that have none yet, a few at a time, and redraw
    Home once if that changes which shows have something left to hear. */
 var showCaughtUp = false, catQueue = [], catRunning = 0, catRedraw = null;
-function catSig(){ return Object.keys(S.subs).sort().map(function(id){ var u = unheard(S.subs[id]); return id+":"+(u===null ? "?" : u.length ? 1 : 0); }).join("|"); }
+function catSig(){ return Object.keys(S.subs).sort().map(function(id){ var u = unheard(S.subs[id]), c = S.cache[id]; return id+":"+(u===null ? "?" : u.length ? 1 : 0)+(c && c.eps ? "e" : ""); }).join("|"); }
 function checkCat(c, memberOf){
   Object.keys(S.subs).forEach(function(id){
     var sh = S.subs[id], ch = S.cache[id];
-    if(!memberOf(sh, c) || (ch && Date.now()-ch.at < 30*60*1000) || inflight[id] || catQueue.indexOf(id)>=0) return;
+    if(!memberOf(sh, c) || (ch && ch.eps && Date.now()-ch.at < 30*60*1000) || inflight[id] || catQueue.indexOf(id)>=0) return;
     catQueue.push(id);
   });
   pumpCat();
@@ -646,6 +656,61 @@ function pumpCat(){
     }; })(before));
   }
 }
+/* Every unfinished episode from a subject's shows (or one show), in the order they play: each show's
+   episodes oldest first, one show after another. Shows are ordered by their newest unfinished episode,
+   newest or oldest first as the sort setting says. */
+function queueShows(q){
+  if(!q) return [];
+  if(q.c) return Object.keys(S.subs).map(function(id){ return S.subs[id]; }).filter(function(sh){ return catsOf(sh).indexOf(q.c)>=0; });
+  var sh = S.subs[q.s] || tempShows[q.s]; return sh ? [sh] : [];
+}
+function queueEps(q){
+  var seen = {}, groups = [];
+  queueShows(q).forEach(function(sh){
+    var c = S.cache[sh.id], mine = [];
+    ((c && c.eps) || []).forEach(function(e){ if(!isPlayed(e.g) && !seen[e.g]){ seen[e.g] = 1; mine.push(e); } });
+    if(!mine.length) return;
+    mine = byDate(mine, true);
+    groups.push({eps:mine, t:new Date(mine[mine.length-1].d).getTime()||0, title:sh.title||""});
+  });
+  var oldFirst = S.epSort==="old";
+  groups.sort(function(a,b){ return (oldFirst ? a.t-b.t : b.t-a.t) || a.title.localeCompare(b.title); });
+  return [].concat.apply([], groups.map(function(g){ return g.eps; }));
+}
+/* What plays after this episode: the one below it in the same list, or the top of the list when it was last. */
+function nextAfter(c){
+  var list = queueEps(c.q), i = -1;
+  for(var k=0;k<list.length;k++){ if(list[k].g===c.g){ i = k; break; } }
+  var rest = list.slice(i+1).concat(i>0 ? list.slice(0, i) : []).filter(function(e){ return e.g!==c.g; });
+  return rest[0] || null;
+}
+function renderTopic(view, cat, memberOf){
+  var q = {c:cat}, shows = queueShows(q), oldFirst = S.epSort==="old";
+  var waiting = shows.filter(function(sh){ var ch = S.cache[sh.id]; return !(ch && ch.eps); }).length;
+  var list = queueEps(q);
+  var sec = el("section");
+  var sortBtn = el("button",{class:"pill-btn", "aria-label":"Show order: "+(oldFirst?"oldest":"newest")+" first. Tap to change.", text:(oldFirst?"Oldest":"Newest")+" shows first ⇅", onclick:function(){ S.epSort = oldFirst ? "new" : "old"; save(); keepScroll(render); }});
+  var playAll = list.length ? el("button",{class:"pill-btn on", text:"▶ Play in order", onclick:function(){ var e = list[0]; e.a = e.a || showOf(e.s).art; playEp(e, true, q); }}) : null;
+  sec.appendChild(el("div",{class:"ep-tools", style:"margin-top:12px"},[ list.length ? el("p",{class:"note", style:"flex:1 1 180px", text: list.length+" episode"+(list.length===1?"":"s")+" you haven't finished, from "+shows.length+" show"+(shows.length===1?"":"s")+". They play top to bottom: each show's episodes oldest first, then the next show. "+(oldFirst ? "Shows with the oldest" : "Shows with the newest")+" episode go first."}) : null, playAll, list.length ? sortBtn : null ]));
+  if(waiting) sec.appendChild(el("p",{class:"note", style:"margin-top:8px", text:"Loading episodes from "+waiting+" more show"+(waiting===1?"":"s")+"…"}));
+  if(!list.length){
+    if(waiting){ sec.appendChild(el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"})); }
+    else sec.appendChild(el("div",{class:"empty", style:"margin-top:12px"},[
+      el("p",{style:"margin:0 0 12px", text:"All caught up in "+cat+". Every episode from its "+shows.length+" show"+(shows.length===1?"":"s")+" has been played."}),
+      el("button",{class:"btn secondary", style:"align-self:center;margin:0 auto", text:"See the shows", onclick:function(){ S.catView = "shows"; save(); render(); }})
+    ]));
+    view.appendChild(sec); return;
+  }
+  var ul = el("ul",{class:"eps"}); sec.appendChild(ul);
+  var shown = 0, n = Math.max(20, topicShown[cat]||0);
+  var more = el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show more episodes", onclick:function(){ add(20); }});
+  function add(k){ list.slice(shown, shown+k).forEach(function(e){ ul.appendChild(epRow(e, showOf(e.s), "new", function(){ keepScroll(render); }, q)); }); shown += k; topicShown[cat] = shown; more.hidden = shown >= list.length; }
+  sec.appendChild(more); add(n);
+  view.appendChild(sec);
+}
+var topicShown = {};
+function keepScroll(f){ var st = $("scroller").scrollTop; f(); $("scroller").scrollTop = st; }
+function onTopic(){ return route.tab==="home" && !route.show && !route.quiet && !arranging && filterCat && filterCat!=="-" && S.catView!=="shows"; }
 function favRow(sh, i){
   var cached = S.cache[sh.id] && S.cache[sh.id].eps && S.cache[sh.id].eps[0];
   var latest = el("div",{class:"latest", text: arranging ? (cached? cached.t : (sh.author||"")) : "Loading latest episode…"});
@@ -886,7 +951,7 @@ function undoDrop(was){
   if(was.fav>=0 && S.fav.indexOf(sh.id)<0) S.fav.splice(Math.min(was.fav, S.fav.length), 0, sh.id);
 }
 /* Each row says where you stand with the episode: New (not started), time left (partly played) or Played. */
-function epRow(e, sh, tab, onMark){
+function epRow(e, sh, tab, onMark, q){
   var pos = S.pos[e.g]||0, played = isPlayed(e.g);
   var len = e.len || (S.pos[e.g+"#len"]||0);
   var when = el("div",{class:"when"});
@@ -901,9 +966,13 @@ function epRow(e, sh, tab, onMark){
   var mark = el("button",{class:"icon-btn plain mark"+(played?" on":""), "aria-pressed":String(played), "aria-label": played ? "Played. Tap to mark "+e.t+" as not played" : "Mark "+e.t+" as played", html:ICON.check, onclick:function(){
     setPlayed(e.g, !played); save(); toast(played ? "Marked as not played" : "Marked as played"); if(onMark) onMark();
   }});
+  // A played episode can go back on the list to hear again, from the start.
+  var again = played && !(q && q.c) ? el("button",{class:"pill-btn", text:"Hear again", "aria-label":"Hear "+e.t+" again", onclick:function(){
+    setPlayed(e.g, false); delete S.pos[e.g]; S.posT[e.g] = Date.now(); save(); toast("Back in New to me"+(catsOf(sh).length ? " and in "+catsOf(sh).join(" and ") : "")); if(onMark) onMark();
+  }}) : null;
   var li = el("li",{class:"ep"+(played?" played":"")},[
-    el("div",null,[ when, el("button",{class:"title", text:e.t, "aria-expanded":"false", onclick:function(){ desc.hidden=!desc.hidden; this.setAttribute("aria-expanded", String(!desc.hidden)); }}) ]),
-    el("div",{class:"ep-acts"},[ mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true); }}) ]),
+    el("div",null,[ q && q.c ? el("div",{class:"ep-show", text:sh.title}) : null, when, el("button",{class:"title", text:e.t, "aria-expanded":"false", onclick:function(){ desc.hidden=!desc.hidden; this.setAttribute("aria-expanded", String(!desc.hidden)); }}) ]),
+    el("div",{class:"ep-acts"},[ again, mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true, q || {s:sh.id}); }}) ]),
     desc
   ]);
   if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
@@ -1214,9 +1283,10 @@ function renderSettings(top, view){
     el("div",{class:"form-grid"},[
       el("label",{class:"field", for:"backSel"},[ "Skip back", sel("backSel",[5,10,15,20,30,45,60], S.skipBack, function(){ S.skipBack = parseInt(this.value,10); save(); applySkipLabels(); }) ]),
       el("label",{class:"field", for:"fwdSel"},[ "Skip forward", sel("fwdSel",[10,15,30,45,60,90,120], S.skipFwd, function(){ S.skipFwd = parseInt(this.value,10); save(); applySkipLabels(); }) ]),
+      el("label",{class:"field", for:"nextSel"},[ "When an episode ends", (function(){ var s = el("select",{id:"nextSel"},[ el("option",{value:"1", text:"Play the next one", selected:S.autoNext!==false}), el("option",{value:"0", text:"Stop", selected:S.autoNext===false}) ]); s.onchange=function(){ S.autoNext = this.value==="1"; save(); }; return s; })() ]),
       el("label",{class:"field", for:"adSel"},[ "Ads marked in chapters", (function(){ var s = el("select",{id:"adSel"},[ el("option",{value:"1", text:"Skip them", selected:S.adSkip}), el("option",{value:"0", text:"Play them", selected:!S.adSkip}) ]); s.onchange=function(){ S.adSkip = this.value==="1"; save(); }; return s; })() ])
     ]),
-    el("p",{text:"Each show also has its own Skip at start and Skip at end setting on its page."})
+    el("p",{text:"The next one comes from the list you started from. In a subject that's its New to me list, which plays each show's episodes oldest first, then the next show. On a show's page it's that show's next unfinished episode, oldest first. The sleep timer's End of episode setting still stops at the end. Each show also has its own Skip at start and Skip at end setting on its page."})
   ]));
   var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
   trimSel.onchange = function(){ S.trim = this.value==="1"; save(); trimStart(); };
@@ -1362,11 +1432,13 @@ function setPlayIcons(){
   if("mediaSession" in navigator) try{ navigator.mediaSession.playbackState = playing?"playing":"paused"; }catch(e){}
 }
 function showOf(id){ return S.subs[id] || tempShows[id] || {title:""}; }
-function playEp(e, autoplay){
+/* q is the list the episode was started from ({c:subject} or {s:show id}); the next one comes from it. */
+function playEp(e, autoplay, q, stayClosed){
   var showObj = showOf(e.s);
-  if(cur && cur.g===e.g){ if(autoplay){ media.play().catch(function(){}); } openPlayer(); return; }
+  if(cur && cur.g===e.g){ if(q) cur.q = q; if(autoplay){ media.play().catch(function(){}); } openPlayer(); return; }
   savePos(true);
   cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||"", f:showObj.feedUrl||""};
+  if(q !== undefined ? q : e.q) cur.q = q !== undefined ? q : e.q;
   S.now = cur; if(autoplay) S.nowT = Date.now(); save();
   ads = []; endSkipped = false; badLen = false; $("seek").disabled = false; resetTranscript();
   var useVideo = e.v || isVideo(e.ty, e.u);
@@ -1388,7 +1460,7 @@ function playEp(e, autoplay){
   if(cur.ch) loadChapters(cur);
   if($("player").classList.contains("tx")) loadTranscript(cur);
   fillNowPlaying();
-  if(autoplay){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); openPlayer(); }
+  if(autoplay){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); if(!stayClosed) openPlayer(); }
   setMediaSession();  trimStart();
 }
 function loadChapters(c){
@@ -1475,7 +1547,7 @@ function onTime(){
   }
   trimTick(t);
   var outro = (showOf(cur && cur.s).skipEnd)||0;
-  if(outro && d && !endSkipped && !media.paused && t >= d - outro && d > outro + 30){ endSkipped = true; toast("Skipped the last "+fmtSecs(outro)); finishEpisode(); media.pause(); return; }
+  if(outro && d && !endSkipped && !media.paused && t >= d - outro && d > outro + 30){ endSkipped = true; toast("Skipped the last "+fmtSecs(outro)); if(!finishEpisode()) media.pause(); return; }
   $("seek").disabled = !d;
   if(!seeking){ $("seek").value = d? Math.round(t/d*1000) : 0; $("tCur").textContent = fmt(t); }
   $("tLeft").textContent = d ? "-"+fmt(Math.max(0,(d-t))/(S.speed||1)) : "";
@@ -1491,11 +1563,19 @@ function savePos(now){
   save(now, true);
   if(!media.paused) syncCheck();
 }
+/* Marks the episode played, then starts the next one from the list it was started from, unless
+   auto-play is off or the sleep timer is set to stop here. Returns true when another one started.
+   The new address is set and played right in the ended event, which is what lets iPhone carry on
+   with the screen locked. */
 function finishEpisode(){
-  if(!cur) return;
+  if(!cur) return false;
+  var stop = sleepEnd===-1, q = cur.q, next = (!stop && S.autoNext!==false && q) ? nextAfter(cur) : null;
   S.played[cur.g] = Date.now(); delete S.pos[cur.g]; S.posT[cur.g] = Date.now(); posDirty = false; save(true); setPlayIcons();
-  if(sleepEnd===-1){ sleepEnd = 0; $("sleepSel").value="0"; $("sleepLeft").textContent=""; }
-  if(route.show) render();
+  if(stop){ sleepEnd = 0; $("sleepSel").value="0"; $("sleepLeft").textContent=""; }
+  if(next){ next.a = next.a || showOf(next.s).art; playEp(next, true, q, true); toast("Up next: "+next.t); }
+  else if(q && !stop && S.autoNext!==false) toast("That was the last new episode in "+(q.c || showOf(q.s).title));
+  if(route.show || onTopic()) keepScroll(render);
+  return !!next;
 }
 [audio, video].forEach(function(m){
   m.addEventListener("timeupdate", function(){ if(m===media) onTime(); });
@@ -2116,7 +2196,7 @@ function dbxUpload(data, rev, keepalive){
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
   return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
-    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin}};
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
 function stable(v){
@@ -2184,7 +2264,7 @@ function mergeSync(base, local, remote, fresh){
   [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
@@ -2200,7 +2280,7 @@ function applyMerged(m){
   var prefsBefore = stable(snap().prefs);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
   normAll(S.subs);
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
   if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){
