@@ -1245,7 +1245,8 @@ function dbxPending(){
   return pkceChallenge(p.v).then(function(ch){ p.ch = ch; lsSet(DBX_PEND, p); return p; });
 }
 function dbxAuthUrl(p, redirect){
-  var q = {client_id:dbxKey(), response_type:"code", code_challenge:p.ch, code_challenge_method:"S256", token_access_type:"offline"};
+  var q = {client_id:dbxKey(), response_type:"code", code_challenge:p.ch, code_challenge_method:"S256", token_access_type:"offline",
+    scope:"account_info.read files.content.read files.content.write"};
   if(redirect){ q.redirect_uri = dbxRedirect(); q.state = p.s; }
   return "https://www.dropbox.com/oauth2/authorize?"+qs(q);
 }
@@ -1503,7 +1504,7 @@ function syncNow(keepalive){
     if(!dbx) return;
     if(e && e.message==="signedout") return;
     var said = errText(e), when = new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
-    if(/missing_scope/.test(said)) setSync("Couldn't save to Dropbox at "+when+". Dropbox said: "+said+". The Dropbox app needs files.content.read and files.content.write ticked on its Permissions tab, then Submit. After that, sign out here and sign in again.", true);
+    if(/missing_scope|required scope/i.test(said)) setSync("Couldn't save to Dropbox at "+when+": the Dropbox app doesn't have permission to read and write its files. On the app's Permissions tab in the Dropbox App Console, tick files.content.read and files.content.write and click Submit. Then sign out here and sign in again. Dropbox said: "+said, true);
     else setSync("Couldn't save to Dropbox at "+when+". Dropbox said: "+said+". Will try again.", true);
     if(!sync.warned){ sync.warned = true; toast("Dropbox sync isn't working. Settings shows why."); }
   }).then(function(){ sync.busy = null; holdEnd(); if(sync.again){ sync.again = false; syncSoon(800); } });
