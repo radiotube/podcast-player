@@ -10,6 +10,11 @@ var A = "Bearer sl.fake";
 var arg = JSON.stringify({path:"/sync.json"});
 var up = JSON.stringify({path:"/sync.json", mode:{".tag":"add"}, autorename:false, mute:true, strict_conflict:true});
 (async function(){
+  var D="https://content.dropboxapi.com/2/files/download";
+  for (const v of ["Bearer ", "Bearer undefined", "Bearer null", "Bearer [object Object]", "sl.fake", "Bearer  sl.fake", "Bearer sl.fake ", "bearer sl.fake"]) {
+    await t("download auth="+JSON.stringify(v), D, {method:"POST", headers:{Authorization:v, "Dropbox-API-Arg":arg}});
+  }
+  out.push("DONE"); show(); return;
   await t("download plain", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{Authorization:A, "Dropbox-API-Arg":arg}});
   await t("download no-store", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{Authorization:A, "Dropbox-API-Arg":arg}, cache:"no-store"});
   await t("download no-auth no-store", "https://content.dropboxapi.com/2/files/download", {method:"POST", headers:{"Dropbox-API-Arg":arg}, cache:"no-store"});
