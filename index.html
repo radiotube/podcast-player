@@ -319,8 +319,18 @@ function setPlayed(g, on){
 var saveT = null;
 function save(now, quiet){
   clearTimeout(saveT);
-  var go = function(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ S.cache = {}; try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e2){} } if(!quiet) syncCheck(); };
+  var go = function(){ if(!store()){ shrinkCache(1); if(!store()){ shrinkCache(2); if(!store()){ S.cache = {}; store(); } } } if(!quiet) syncCheck(); };
   if(now) go(); else saveT = setTimeout(go, 300);
+}
+
+function store(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); return true; }catch(e){ return false; } }
+/* When the browser's storage is full, saved episode lists give way first: descriptions, then the lists
+   themselves. The list of episode ids stays, so New to me counts still work until a show is opened. */
+function shrinkCache(level){
+  Object.keys(S.cache).forEach(function(id){ var c = S.cache[id]; if(!c) return;
+    if(level===1 && c.eps) c.eps.forEach(function(e){ e.x = ""; });
+    if(level===2){ if(!c.gs && c.eps) c.gs = c.eps.map(function(e){ return e.g; }); delete c.eps; }
+  });
 }
 
 /* ---------- helpers ---------- */
@@ -361,7 +371,7 @@ function subjects(){
 }
 /* Episodes in a show's list not yet finished (partly played ones count). null until the list has loaded once. */
 function unheard(sh){
-  var c = S.cache[sh.id]; if(!c || !c.eps) return null;
+  var c = S.cache[sh.id]; if(!c || !(c.gs || c.eps)) return null;
   return (c.gs || c.eps.map(function(e){ return e.g; })).filter(function(g){ return !isPlayed(g); });
 }
 function byDate(list, oldFirst){
@@ -416,18 +426,21 @@ function piSearch(term){ return pi("search/byterm", {q:term, max:30}).then(funct
 var inflight = {};
 function episodesFor(show, force){
   var c = S.cache[show.id];
-  if(!force && c && Date.now()-c.at < 30*60*1000) return Promise.resolve(c.eps);
+  if(!force && c && c.eps && Date.now()-c.at < 30*60*1000) return Promise.resolve(c.eps);
   if(inflight[show.id]) return inflight[show.id];
   var p = (hasPI() ? fetchPIEps(show).catch(function(){ return fetchAppleOrRss(show); }) : fetchAppleOrRss(show)).then(function(eps){
-    S.cache[show.id] = {at:Date.now(), eps:eps.slice(0,60), gs:eps.map(function(e){ return e.g; })}; save(); delete inflight[show.id]; return eps;
-  }, function(err){ delete inflight[show.id]; if(c) return c.eps; throw err; });
+    // Keep the same 100 episodes whether the list comes fresh or from the saved copy, so Recent and
+    // New to me don't change length. The saved copy keeps shorter descriptions to save space.
+    eps = eps.slice(0,100);
+    S.cache[show.id] = {at:Date.now(), eps:eps.map(function(e){ var c = {}; for(var k in e) c[k] = e[k]; if(c.x && c.x.length > 700) c.x = c.x.slice(0,700)+"…"; return c; }), gs:eps.map(function(e){ return e.g; })}; save(); delete inflight[show.id]; return eps;
+  }, function(err){ delete inflight[show.id]; if(c && c.eps) return c.eps; throw err; });
   inflight[show.id] = p; return p;
 }
 function fetchAppleOrRss(show){ return show.itunesId ? fetchAppleEps(show) : fetchRssEps(show); }
 function fetchPIEps(show){
-  var call = show.piId ? pi("episodes/byfeedid", {id:show.piId, max:60, fulltext:""})
-           : show.itunesId ? pi("episodes/byitunesid", {id:show.itunesId, max:60, fulltext:""})
-           : pi("episodes/byfeedurl", {url:show.feedUrl, max:60, fulltext:""});
+  var call = show.piId ? pi("episodes/byfeedid", {id:show.piId, max:100, fulltext:""})
+           : show.itunesId ? pi("episodes/byitunesid", {id:show.itunesId, max:100, fulltext:""})
+           : pi("episodes/byfeedurl", {url:show.feedUrl, max:100, fulltext:""});
   return call.then(function(d){
     var items = d.items||[]; if(!items.length) throw new Error("empty");
     if(!show.piId && items[0].feedId){ show.piId = items[0].feedId; }
@@ -589,7 +602,7 @@ function pumpCat(){
   }
 }
 function favRow(sh, i){
-  var cached = S.cache[sh.id] && S.cache[sh.id].eps[0];
+  var cached = S.cache[sh.id] && S.cache[sh.id].eps && S.cache[sh.id].eps[0];
   var latest = el("div",{class:"latest", text: arranging ? (cached? cached.t : (sh.author||"")) : "Loading latest episode…"});
   var play = el("button",{class:"play-btn", "aria-label":"Play latest episode of "+sh.title, html:ICON.play, disabled:true});
   var li = el("li",{class:"fav", "data-id":sh.id},[
