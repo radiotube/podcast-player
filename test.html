@@ -276,6 +276,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     if(localStorage.getItem("mock.expire")==="1" && auth==="Bearer AT1"){ log(short+" 401 (expired)"); return resp(401,{error_summary:"expired_access_token/"}); }
     if(/get_current_account/.test(url)){ log(short); return resp(200,{name:{display_name:"Test Person"},email:"test@example.com"}); }
     if(/token\/revoke/.test(url)){ log("revoke"); return resp(200,"null"); }
+    if(localStorage.getItem("mock.scope")==="1" && /content\.dropboxapi/.test(url)){ log("401 missing_scope"); return resp(401,{error_summary:"missing_scope/..", error:{".tag":"missing_scope", required_scope:"files.content.read"}}); }
     var rem = JSON.parse(localStorage.getItem(REM)||"null");
     if(/files\/download/.test(url)){ log("download "+(rem?"r"+rem.rev:"none")+" auth:"+auth.slice(7)); if(!rem) return resp(409,{error_summary:"path/not_found/."}); return resp(200, rem.body, {"Content-Type":"application/octet-stream","Dropbox-API-Result":JSON.stringify({rev:"r"+rem.rev})}); }
     if(/files\/upload/.test(url)){ var arg = JSON.parse(h["Dropbox-API-Arg"]); var m = arg.mode;
@@ -308,6 +309,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     b("Expire AT1", function(){ localStorage.setItem("mock.expire","1"); });
     b("Revoke refresh", function(){ localStorage.setItem("mock.revoked","1"); var a = JSON.parse(localStorage.getItem("pp.dbx")); a.exp = 0; localStorage.setItem("pp.dbx", JSON.stringify(a)); });
     b("Slow Dropbox on/off", function(){ localStorage.setItem("mock.slow", localStorage.getItem("mock.slow")==="1"?"0":"1"); show(); });
+    b("Missing scope on/off", function(){ localStorage.setItem("mock.scope", localStorage.getItem("mock.scope")==="1"?"0":"1"); show(); });
     b("Offline on/off", function(){ localStorage.setItem("mock.offline", localStorage.getItem("mock.offline")==="1"?"0":"1"); show(); });
     b("Simulate Dropbox return", function(){ localStorage.removeItem("mock.revoked"); var p = JSON.parse(localStorage.getItem("pp.dbx.pending")); location.href = location.pathname+"?code=GOODCODE&state="+(p?p.s:"x"); });
     b("Return w/ bad state", function(){ location.href = location.pathname+"?code=GOODCODE&state=nope"; });
@@ -1322,14 +1324,36 @@ function dbxAuthUrl(p, redirect){
   if(redirect){ q.redirect_uri = dbxRedirect(); q.state = p.s; }
   return "https://www.dropbox.com/oauth2/authorize?"+qs(q);
 }
+/* Dropbox's own words for an error, so the Sync box can show exactly what went wrong. */
+function dbxErr(j, status){
+  j = j || {};
+  var m = j.error_summary || j.error_description || (typeof j.error==="string" ? j.error : "") || "";
+  m = String(m).replace(/\/\.+$|\/+$/,"");
+  return m ? m+(status ? " (HTTP "+status+")" : "") : "HTTP "+status;
+}
+function errText(e){
+  if(!e) return "unknown error";
+  if(e instanceof TypeError) return "no connection to Dropbox ("+(e.message||"network error")+")";
+  return e.message || String(e);
+}
+/* A request iOS froze while the app was in the background can hang forever and block every later sync,
+   so each Dropbox request gives up after 25 seconds. */
+function dbxFetch(url, opts){
+  var ac = typeof AbortController!=="undefined" ? new AbortController() : null, t;
+  if(ac){ opts.signal = ac.signal; t = setTimeout(function(){ ac.abort(); }, 25000); }
+  return fetch(url, opts).then(function(r){ clearTimeout(t); return r; }, function(e){
+    clearTimeout(t); if(e && e.name==="AbortError") throw new Error("Dropbox took too long to answer");
+    throw e;
+  });
+}
 function tokenCall(params){
-  return fetch("https://api.dropboxapi.com/oauth2/token", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:qs(params)})
+  return dbxFetch("https://api.dropboxapi.com/oauth2/token", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:qs(params)})
     .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ j.status = r.status; return j; }); });
 }
 function dbxExchange(code, p, redirect){
   var q = {grant_type:"authorization_code", code:code, code_verifier:p.v, client_id:dbxKey()};
   if(redirect) q.redirect_uri = dbxRedirect();
-  return tokenCall(q).then(function(j){ if(!j.access_token) throw new Error(j.error||"HTTP "+j.status); return j; });
+  return tokenCall(q).then(function(j){ if(!j.access_token) throw new Error(dbxErr(j, j.status)); return j; });
 }
 /* A pasted code may come from either kind of sign-in, so try the likely one first, then the other. */
 function dbxUseCode(code){
@@ -1365,7 +1389,7 @@ function dbxToken(force){
   dbxToken.p = tokenCall({grant_type:"refresh_token", refresh_token:dbx.refresh, client_id:dbxKey()}).then(function(j){
     if(j.access_token){ dbx.access = j.access_token; dbx.exp = Date.now()+(j.expires_in||14400)*1000; lsSet(DBX_AUTH, dbx); return dbx.access; }
     if(j.status===400 || j.status===401){ dbxLost(); throw new Error("signedout"); }
-    throw new Error("HTTP "+j.status);
+    throw new Error(dbxErr(j, j.status));
   });
   dbxToken.p.then(clear, clear);
   return dbxToken.p;
@@ -1373,19 +1397,19 @@ function dbxToken(force){
 function dbxCall(url, headers, body, keepalive, retried){
   return dbxToken(retried).then(function(tok){
     var h = {Authorization:"Bearer "+tok}; for(var k in headers) h[k] = headers[k];
-    return fetch(url, {method:"POST", headers:h, body:body, keepalive:!!keepalive, cache:"no-store"});
+    return dbxFetch(url, {method:"POST", headers:h, body:body, cache:"no-store"});
   }).then(function(r){ return (r.status===401 && !retried) ? dbxCall(url, headers, body, keepalive, true) : r; });
 }
 function dbxJson(r){ return r.json().catch(function(){ return {}; }); }
 function dbxApi(path, arg){
   return dbxCall("https://api.dropboxapi.com/2/"+path, {"Content-Type":"application/json"}, JSON.stringify(arg==null?null:arg)).then(function(r){
-    return dbxJson(r).then(function(j){ if(!r.ok) throw new Error(j.error_summary||"HTTP "+r.status); return j; });
+    return dbxJson(r).then(function(j){ if(!r.ok) throw new Error(dbxErr(j, r.status)); return j; });
   });
 }
 function dbxDownload(){
   return dbxCall("https://content.dropboxapi.com/2/files/download", {"Dropbox-API-Arg":JSON.stringify({path:DBX_FILE})}).then(function(r){
-    if(r.status===409) return dbxJson(r).then(function(j){ if(/not_found/.test(j.error_summary||"")) return null; throw new Error(j.error_summary||"HTTP 409"); });
-    if(!r.ok) throw new Error("HTTP "+r.status);
+    if(r.status===409) return dbxJson(r).then(function(j){ if(/not_found/.test(j.error_summary||"")) return null; throw new Error(dbxErr(j, 409)); });
+    if(!r.ok) return dbxJson(r).then(function(j){ throw new Error(dbxErr(j, r.status)); });
     var meta = {}; try{ meta = JSON.parse(r.headers.get("Dropbox-API-Result")||"{}"); }catch(e){}
     return r.text().then(function(t){
       var d = null; try{ d = JSON.parse(t); }catch(e){}
@@ -1400,7 +1424,7 @@ function dbxUpload(data, rev, keepalive){
   return dbxCall("https://content.dropboxapi.com/2/files/upload", {"Dropbox-API-Arg":JSON.stringify(arg), "Content-Type":"application/octet-stream"}, body, keepalive && body.length < 60000).then(function(r){
     return dbxJson(r).then(function(j){
       if(r.status===409 && /conflict/.test(j.error_summary||"")){ var e = new Error("conflict"); e.conflict = true; throw e; }
-      if(!r.ok) throw new Error(j.error_summary||"HTTP "+r.status);
+      if(!r.ok) throw new Error(dbxErr(j, r.status));
       return j.rev;
     });
   });
@@ -1538,12 +1562,14 @@ function syncNow(keepalive){
   if(navigator.onLine===false){ setSync("Offline. Changes will sync when you're back online."); return Promise.resolve(); }
   setSync("Syncing…");
   sync.busy = runSync(0, keepalive).then(function(){
-    sync.at = Date.now(); sync.sent = stable(snap()); sync.syncedKey = keyState(); setSync(syncedLabel());
+    sync.at = Date.now(); sync.sent = stable(snap()); sync.syncedKey = keyState(); sync.warned = false; setSync(syncedLabel());
   }, function(e){
     if(!dbx) return;
     if(e && e.message==="signedout") return;
-    var offline = (e instanceof TypeError) || navigator.onLine===false;
-    setSync(offline ? "Couldn't reach Dropbox. Will try again shortly." : "Sync didn't work this time ("+(e && e.message || "error")+"). Will try again.", !offline);
+    var said = errText(e), when = new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+    if(/missing_scope/.test(said)) setSync("Couldn't save to Dropbox at "+when+". Dropbox said: "+said+". The Dropbox app needs files.content.read and files.content.write ticked on its Permissions tab, then Submit. After that, sign out here and sign in again.", true);
+    else setSync("Couldn't save to Dropbox at "+when+". Dropbox said: "+said+". Will try again.", true);
+    if(!sync.warned){ sync.warned = true; toast("Dropbox sync isn't working. Settings shows why."); }
   }).then(function(){ sync.busy = null; holdEnd(); if(sync.again){ sync.again = false; syncSoon(800); } });
   return sync.busy;
 }
@@ -1574,12 +1600,12 @@ function dbxReturn(){
   if(!p.has("code") && !p.has("error")) return;
   try{ history.replaceState(null, "", dbxRedirect()); }catch(e){}
   route = {tab:"settings"};
-  if(p.get("error")){ setSync(p.get("error")==="access_denied" ? "Dropbox sign-in was canceled." : "Dropbox sign-in didn't finish. Try again.", p.get("error")!=="access_denied"); return; }
+  if(p.get("error")){ setSync(p.get("error")==="access_denied" ? "Dropbox sign-in was canceled." : "Dropbox sign-in didn't finish. Dropbox said: "+p.get("error")+(p.get("error_description")? " ("+p.get("error_description")+")" : "")+". Try again.", p.get("error")!=="access_denied"); return; }
   var pend = lsGet(DBX_PEND), code = p.get("code");
   if(!pend || pend.s!==p.get("state")){ sync.orphan = code; return; }
   setSync("Finishing sign-in…");
-  dbxExchange(code, pend, true).then(gotTokens).then(function(){ if(route.tab==="settings" && !route.show) render(); }, function(){
-    setSync("Dropbox sign-in didn't finish. Try again.", true); if(route.tab==="settings") render();
+  dbxExchange(code, pend, true).then(gotTokens).then(function(){ if(route.tab==="settings" && !route.show) render(); }, function(e){
+    setSync("Dropbox sign-in didn't finish. Dropbox said: "+errText(e)+". Try again.", true); if(route.tab==="settings") render();
   });
 }
 function syncCard(){
@@ -1604,7 +1630,7 @@ function syncCard(){
   var connect = el("button",{class:"btn", text:"Finish sign-in", onclick:function(){
     setSync("Finishing sign-in…");
     dbxUseCode(codeInp.value).then(function(){ render(); }, function(e){
-      setSync(e.message==="empty" ? "Paste the code Dropbox showed you first." : "Dropbox didn't accept that code. Codes work once and expire after a few minutes, so get a new one and try again.", true);
+      setSync(e.message==="empty" ? "Paste the code Dropbox showed you first." : "Dropbox didn't accept that code ("+errText(e)+"). Codes work once and expire after a few minutes, so get a new one and try again.", true);
     });
   }});
   var codeBox = el("div",{class:"form-grid"},[ el("label",{class:"field", for:"dbxCode"},[ "Code from Dropbox", codeInp ]) ]);
