@@ -1164,6 +1164,13 @@ function renderSettings(top, view){
 
   view.appendChild(syncCard());
 
+  var qn = quietShows().length;
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Quiet shows"}),
+    el("p",{text:"Shows you follow with no new episode in over a year are flagged as candidates to unfollow. The app checks every few days. "+(qn ? qn+" show"+(qn===1?" is":"s are")+" flagged now." : "None are flagged now.")}),
+    el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Review quiet shows", onclick:function(){ go({tab:"home", quiet:true}); }}) ])
+  ]));
+
   var piStatus = el("p",{class:"status", id:"piStatus", "aria-live":"polite", text: hasPI()? "Key saved on this device." : ""});
   var keyInp = el("input",{id:"piKey", type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", value:S.pi.key||"", placeholder:"API key"});
   var secInp = el("input",{id:"piSecret", type:"password", autocomplete:"off", value:S.pi.secret||"", placeholder:"API secret"});
