@@ -9,6 +9,7 @@ A podcast player web app for iPhone and iPad that installs to the Home Screen fr
 - Skip back and forward amounts you choose, per-show skip at start and end, and skipping of ads a show marks in its chapters
 - Transcripts when a show publishes them (Podcasting 2.0), following along as it plays
 - Speed, sleep timer, resume where you left off, lock screen controls
+- Shows that haven't put out an episode in over a year are flagged as candidates to unfollow; you choose Unfollow or Keep for each
 - Overcast OPML import, and backup and restore between devices
 - Sync between devices through each person's own Dropbox (Sign in with Dropbox in Settings)
 

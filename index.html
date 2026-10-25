@@ -205,6 +205,18 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .chip.caught{opacity:.5}
 .chip.caught[aria-pressed="true"]{opacity:1}
 .empty .btn{display:block}
+
+/* Quiet shows (no new episode in a year) */
+.badge.quiet{background:rgba(239,125,109,.16);color:var(--danger)}
+.quiet-card{border:1px solid rgba(239,125,109,.45)}
+.quiet-row{display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px 12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.quiet-row:last-child{border-bottom:0}
+.quiet-row img{width:56px;height:56px;border-radius:10px;object-fit:cover;background:var(--surface-2)}
+.quiet-row .t{font-weight:600}
+.quiet-row .a{font-size:14px;color:var(--muted)}
+.quiet-row .btn-row{grid-column:1/-1}
+.quiet-row .btn{padding:10px 16px;min-height:44px}
+.btn.danger{background:var(--danger);color:#1f0906}
 </style>
 </head>
 <body>
@@ -284,7 +296,7 @@ var SKIP_EDGE = [0,10,15,20,30,45,60,90,120,180];
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent"};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", unf:{}, keep:{}, newest:{}, quietAt:0};}
 var S = load();
 function load(){
   var s = null;
@@ -432,6 +444,7 @@ function episodesFor(show, force){
     // Keep the same 100 episodes whether the list comes fresh or from the saved copy, so Recent and
     // New to me don't change length. The saved copy keeps shorter descriptions to save space.
     eps = eps.slice(0,100);
+    noteNewest(show.id, newestOf(eps));
     S.cache[show.id] = {at:Date.now(), eps:eps.map(function(e){ var c = {}; for(var k in e) c[k] = e[k]; if(c.x && c.x.length > 700) c.x = c.x.slice(0,700)+"…"; return c; }), gs:eps.map(function(e){ return e.g; })}; save(); delete inflight[show.id]; return eps;
   }, function(err){ delete inflight[show.id]; if(c && c.eps) return c.eps; throw err; });
   inflight[show.id] = p; return p;
@@ -503,6 +516,7 @@ function render(){
   var top = $("topbar"), view = $("view"); top.innerHTML = ""; view.innerHTML = "";
   view.classList.toggle("arranging", arranging && !route.show && route.tab==="home");
   if(route.show) return renderShow(top, view, route.show);
+  if(route.quiet) return renderQuiet(top, view);
   if(route.tab==="suggest") return renderSuggest(top, view);
   if(route.tab==="search") return renderSearch(top, view);
   if(route.tab==="settings") return renderSettings(top, view);
@@ -531,6 +545,7 @@ function renderHome(top, view){
     mk("All", ""); subs.forEach(function(c){ mk(c, c); }); mk("No subject", "-");
     view.appendChild(chips);
   }
+  if(!arranging){ var qb = quietBanner(); if(qb) view.appendChild(qb); }
   if(filterCat && !arranging) checkCat(filterCat, memberOf);
   var hiddenN = filterCat ? Object.keys(S.subs).filter(function(id){ var sh = S.subs[id]; return memberOf(sh, filterCat) && !leftToHear(sh); }).length : 0;
   var catName = filterCat==="-" ? "No subject" : filterCat;
@@ -608,7 +623,7 @@ function favRow(sh, i){
   var li = el("li",{class:"fav", "data-id":sh.id},[
     el("span",{class:"rank", text:String(i+1)}),
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
-    el("div",{class:"meta"},[ catsOf(sh).length? el("div",{class:"subj", text:catsOf(sh).join(" · ")}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id, fresh:true}); }}), latest ]),
+    el("div",{class:"meta"},[ catsOf(sh).length? el("div",{class:"subj", text:catsOf(sh).join(" · ")}) : null, isQuiet(sh)? el("span",{class:"badge quiet", text:"Quiet 1+ year"}) : null, el("button",{class:"show-name", text:sh.title, onclick:function(){ if(!arranging) go({tab:"home", show:sh.id, fresh:true}); }}), latest ]),
     play,
     el("div",{class:"arrange-tools"},[
       el("button",{class:"icon-btn", "aria-label":"Move "+sh.title+" up", html:ICON.up, disabled:i===0, onclick:function(){ moveFav(i,i-1); }}),
@@ -661,6 +676,7 @@ function showRow(sh, withCount){
   var subbed = !!S.subs[sh.id];
   var a = el("div",{class:"a"});
   var u = withCount ? unheard(sh) : null;
+  if(subbed && isQuiet(sh)){ a.appendChild(el("span",{class:"badge quiet", text:"Quiet 1+ year"})); a.appendChild(document.createTextNode(" ")); }
   if(u && u.length) a.appendChild(el("span",{class:"new", text:u.length+" new to me · "}));
   a.appendChild(document.createTextNode((sh.author||"")+(sh.medium==="video"?" · Video":"")));
   return el("li",{class:"show-row"},[
@@ -687,7 +703,7 @@ function adopt(sh){
   normCats(sh);
   if(sh.sugCat && catsOf(sh).indexOf(sh.sugCat)<0) sh.cats = catsOf(sh).concat([sh.sugCat]);
   delete sh.sugCat; delete sh.genre; delete sh.last; delete sh.n;
-  S.subs[sh.id] = sh; return sh;
+  sh.fT = Date.now(); S.subs[sh.id] = sh; return sh;
 }
 
 /* ---------- Show page ---------- */
@@ -696,7 +712,8 @@ function renderShow(top, view, id){
   if(route.temp) tempShows[id] = route.temp;
   var sh = S.subs[id] || tempShows[id];
   if(!sh){ go({tab:route.tab}); return; }
-  top.appendChild(el("button",{class:"back", html:ICON.chev+"<span>Back</span>", onclick:function(){ go({tab:route.tab}); }}));
+  var from = route.from;
+  top.appendChild(el("button",{class:"back", html:ICON.chev+"<span>Back</span>", onclick:function(){ go(from==="quiet" ? {tab:"home", quiet:true} : {tab:route.tab}); }}));
   top.appendChild(el("div",{class:"sub-title", text:sh.title}));
   top.appendChild(el("span",{style:"width:60px"}));
   var subbed = !!S.subs[sh.id], fav = S.fav.indexOf(sh.id)>=0;
@@ -706,6 +723,7 @@ function renderShow(top, view, id){
            : el("button",{class:"pill-btn", text:"Follow", onclick:function(){ adopt(sh); save(); toast("Following "+sh.title+(catsOf(sh).length?" under "+catsOf(sh).join(" and "):"")); render(); }})
   ]);
   view.appendChild(el("div",{class:"show-head"},[ el("img",{src:sh.art||"", alt:""}), el("div",null,[ el("h2",{text:sh.title}), el("p",{class:"a", text:sh.author||""}), actions ]) ]));
+  if(subbed && isQuiet(sh)) view.appendChild(quietCard(sh));
   if(subbed) view.appendChild(showSettings(sh));
   var listWrap = el("section",null,[ el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"}) ]);
   view.appendChild(listWrap);
@@ -796,7 +814,19 @@ function showSettings(sh){
   ]);
 }
 function unfollow(sh){
-  delete S.subs[sh.id]; var i = S.fav.indexOf(sh.id); if(i>=0) S.fav.splice(i,1); delete S.cache[sh.id]; save(); toast("Unfollowed "+sh.title); go({tab:"home"});
+  dropShow(sh); save(); toast("Unfollowed "+sh.title); go({tab:"home"});
+}
+/* Unfollowing leaves a dated note that travels through Dropbox, so a device with an older list
+   can't bring the show back. Following again later stamps the show newer than that note. */
+function dropShow(sh){
+  var i = S.fav.indexOf(sh.id), was = {sh:S.subs[sh.id], fav:i, cache:S.cache[sh.id]};
+  delete S.subs[sh.id]; if(i>=0) S.fav.splice(i,1); delete S.cache[sh.id]; S.unf[sh.id] = Date.now();
+  return was;
+}
+function undoDrop(was){
+  var sh = was.sh; if(!sh) return;
+  sh.fT = Date.now(); S.subs[sh.id] = sh; if(was.cache) S.cache[sh.id] = was.cache;
+  if(was.fav>=0 && S.fav.indexOf(sh.id)<0) S.fav.splice(Math.min(was.fav, S.fav.length), 0, sh.id);
 }
 /* Each row says where you stand with the episode: New (not started), time left (partly played) or Played. */
 function epRow(e, sh, tab, onMark){
@@ -821,6 +851,152 @@ function epRow(e, sh, tab, onMark){
   ]);
   if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
   return li;
+}
+
+/* ---------- Quiet shows: no new episode in a year, offered for unfollowing ---------- */
+var YEAR = 365*24*3600*1000, QUIET_RESCAN = 3*24*3600*1000;
+var quiet = {busy:null, msg:""};
+function newestOf(eps){ var m = 0; (eps||[]).forEach(function(e){ var t = new Date(e.d).getTime(); if(t && t <= Date.now()+864e5 && t > m) m = t; }); return m; }
+/* The newest episode date each device has seen for a show. Kept on the device only. */
+function noteNewest(id, t){
+  if(!id) return; var n = S.newest[id] || (S.newest[id] = {t:0, at:0});
+  if(t && t > n.t) n.t = t; n.at = Date.now();
+}
+function lastEp(sh){ var n = S.newest[sh.id]; return n && n.t || 0; }
+/* A show is flagged when its newest episode is over a year old, unless Kevin chose Keep after that
+   episode came out. If it posts again later and then goes quiet for another year, it's flagged again. */
+function isQuiet(sh){
+  var t = lastEp(sh); if(!t || Date.now()-t < YEAR) return false;
+  return !((S.keep[sh.id]||0) > t);
+}
+function quietShows(){ return Object.keys(S.subs).map(function(id){ return S.subs[id]; }).filter(isQuiet).sort(function(a,b){ return lastEp(a)-lastEp(b); }); }
+function keptQuiet(){ return Object.keys(S.subs).map(function(id){ return S.subs[id]; }).filter(function(sh){ var t = lastEp(sh); return t && Date.now()-t >= YEAR && !isQuiet(sh); }); }
+function ago(t){
+  var d = (Date.now()-t)/864e5;
+  if(d < 730) return Math.round(d/30.4)+" months ago";
+  var y = Math.floor(d/365.25); return y+" year"+(y===1?"":"s")+" ago";
+}
+function fullDate(t){ return new Date(t).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"}); }
+/* Check every followed show's newest episode. Apple answers for most shows in one call. Anything that
+   looks quiet is checked a second way (Podcast Index or the show's own feed) before it's flagged. */
+function quietScan(){
+  if(quiet.busy) return quiet.busy;
+  if(navigator.onLine===false) return Promise.resolve();
+  var shows = Object.keys(S.subs).map(function(id){ return S.subs[id]; });
+  var seen = {};
+  var byIt = {}; shows.forEach(function(sh){ if(sh.itunesId) (byIt[sh.itunesId] = byIt[sh.itunesId]||[]).push(sh); });
+  var its = Object.keys(byIt), chunks = [];
+  for(var i=0;i<its.length;i+=120) chunks.push(its.slice(i, i+120));
+  var apple = chunks.reduce(function(p, ch){
+    return p.then(function(){
+      return jsonp("https://itunes.apple.com/lookup?entity=podcast&id="+ch.join(",")).then(function(d){
+        (d.results||[]).forEach(function(r){ var t = r.releaseDate ? new Date(r.releaseDate).getTime() : 0;
+          (byIt[r.collectionId]||[]).forEach(function(sh){ if(t){ noteNewest(sh.id, t); seen[sh.id] = 1; } }); });
+      }, function(){});
+    });
+  }, Promise.resolve());
+  var pool = function(list, fn){
+    var k = 0; var worker = function(){ if(k >= list.length) return Promise.resolve(); var sh = list[k++]; return fn(sh).catch(function(){}).then(worker); };
+    return Promise.all([worker(), worker(), worker()]);
+  };
+  var second = function(sh){
+    if(hasPI()) return episodesFor(sh).then(function(eps){ noteNewest(sh.id, newestOf(eps)); seen[sh.id] = 1; });
+    return fetchRssEps(sh).then(function(eps){ noteNewest(sh.id, newestOf(eps)); seen[sh.id] = 1; }, function(){ return episodesFor(sh).then(function(eps){ noteNewest(sh.id, newestOf(eps)); seen[sh.id] = 1; }); });
+  };
+  var sig = function(){ return quietShows().map(function(sh){ return sh.id; }).join("|"); }, before = sig();
+  quiet.msg = "Checking "+shows.length+" show"+(shows.length===1?"":"s")+"…"; quietStatus();
+  quiet.busy = apple.then(function(){
+    // Shows Apple couldn't date, then a second look at the ones that seem quiet.
+    var rest = shows.filter(function(sh){ return S.subs[sh.id] && !seen[sh.id]; });
+    return pool(rest, function(sh){ return episodesFor(sh).then(function(eps){ noteNewest(sh.id, newestOf(eps)); if(newestOf(eps)) seen[sh.id] = 1; }); });
+  }).then(function(){
+    return pool(shows.filter(function(sh){ return S.subs[sh.id] && isQuiet(sh); }), second);
+  }).then(function(){
+    var missed = shows.filter(function(sh){ return S.subs[sh.id] && !seen[sh.id] && !lastEp(sh); }).length;
+    S.quietAt = Date.now(); save(true, true);
+    quiet.msg = "Checked "+new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})+"."+(missed ? " "+missed+" show"+(missed===1?"":"s")+" couldn't be checked." : "");
+  }).then(function(){
+    quiet.busy = null; quietStatus();
+    if(!route.show && route.tab==="home" && !arranging && (route.quiet || sig()!==before)){ var st = $("scroller").scrollTop; render(); $("scroller").scrollTop = st; }
+  });
+  return quiet.busy;
+}
+function quietStatus(){ var n = $("quietStatus"); if(n) n.textContent = quiet.msg; }
+function quietBanner(){
+  var list = quietShows(); if(!list.length) return null;
+  var n = list.length;
+  return el("div",{class:"card quiet-card"},[
+    el("h3",{text: n===1 ? "1 show hasn't put out an episode in over a year" : n+" shows haven't put out an episode in over a year"}),
+    el("p",{text:"They're candidates to unfollow. Nothing is removed until you choose."}),
+    el("div",{class:"btn-row"},[ el("button",{class:"btn", text:"Review them", onclick:function(){ go({tab:"home", quiet:true}); }}) ])
+  ]);
+}
+function keepShow(sh){ S.keep[sh.id] = Date.now(); save(); }
+function quietCard(sh){
+  var t = lastEp(sh);
+  return el("div",{class:"card quiet-card"},[
+    el("h3",{text:"No new episode since "+fullDate(t)}),
+    el("p",{text:"This show hasn't posted in "+ago(t).replace(" ago","")+", so it's a candidate to unfollow. Keep stops the reminder unless it posts again and then goes quiet for another year."}),
+    el("div",{class:"btn-row"},[
+      el("button",{class:"btn danger", text:"Unfollow", onclick:function(){ unfollow(sh); }}),
+      el("button",{class:"btn secondary", text:"Keep following", onclick:function(){ keepShow(sh); toast("Keeping "+sh.title); render(); }})
+    ])
+  ]);
+}
+function renderQuiet(top, view){
+  top.appendChild(el("button",{class:"back", html:ICON.chev+"<span>Shows</span>", onclick:function(){ go({tab:"home"}); }}));
+  top.appendChild(el("div",{class:"sub-title", text:"Quiet shows"}));
+  top.appendChild(el("span",{style:"width:60px"}));
+  var list = quietShows();
+  view.appendChild(el("p",{class:"note", text:"Shows you follow with no new episode in over a year, quietest first. Unfollow takes a show off every list on all your devices. Keep stops flagging it unless it posts again and then goes quiet for another year."}));
+  var ul = el("div",{class:"card"});
+  if(!list.length) ul.appendChild(el("p",{text:"No quiet shows right now. Every show you follow has put out an episode in the last year, or you chose to keep it."}));
+  var rowFor = function(sh, kept){
+    var t = lastEp(sh);
+    var row = el("div",{class:"quiet-row"});
+    var draw = function(){
+      row.innerHTML = "";
+      row.appendChild(el("img",{src:sh.art||"", alt:"", loading:"lazy"}));
+      row.appendChild(el("button",{class:"row-link", onclick:function(){ go({tab:"home", show:sh.id, fresh:true, from:"quiet"}); }},[
+        el("div",{class:"t", text:sh.title}),
+        el("div",{class:"a", text:"Last episode "+fullDate(t)+" ("+ago(t)+")"+(kept ? " · You chose to keep it" : "")})
+      ]));
+      row.appendChild(el("div",{class:"btn-row"},[
+        el("button",{class:"btn danger", "aria-label":"Unfollow "+sh.title, text:"Unfollow", onclick:function(){
+          var was = dropShow(sh); save();
+          row.innerHTML = "";
+          row.appendChild(el("p",{class:"note", style:"grid-column:1/-1", text:"Unfollowed "+sh.title+"."}));
+          row.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Undo", onclick:function(){ undoDrop(was); save(); draw(); }}) ]));
+        }}),
+        kept ? null : el("button",{class:"btn secondary", "aria-label":"Keep following "+sh.title, text:"Keep", onclick:function(){
+          var before = S.keep[sh.id]; keepShow(sh);
+          row.innerHTML = "";
+          row.appendChild(el("p",{class:"note", style:"grid-column:1/-1", text:"Keeping "+sh.title+"."}));
+          row.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Undo", onclick:function(){ if(before) S.keep[sh.id] = before; else delete S.keep[sh.id]; save(); draw(); }}) ]));
+        }})
+      ]));
+    };
+    draw(); return row;
+  };
+  list.forEach(function(sh){ ul.appendChild(rowFor(sh, false)); });
+  view.appendChild(ul);
+  if(list.length > 1){
+    var armed = false;
+    view.appendChild(el("button",{class:"btn secondary", text:"Unfollow all "+list.length, onclick:function(){
+      if(!armed){ armed = true; this.textContent = "Tap again to unfollow all "+list.length; var b = this; setTimeout(function(){ if(armed){ armed = false; b.textContent = "Unfollow all "+list.length; } }, 8000); return; }
+      list.forEach(function(sh){ if(S.subs[sh.id]) dropShow(sh); }); save(); toast("Unfollowed "+list.length+" shows"); render();
+    }}));
+  }
+  var kept = keptQuiet();
+  if(kept.length){
+    var kc = el("div",{class:"card"},[ el("h3",{text:"Quiet shows you chose to keep"}) ]);
+    kept.forEach(function(sh){ kc.appendChild(rowFor(sh, true)); });
+    view.appendChild(kc);
+  }
+  view.appendChild(el("div",{class:"btn-row", style:"align-items:center"},[
+    el("button",{class:"btn secondary", text:"Check again", onclick:function(){ quietScan(); }}),
+    el("p",{class:"status", id:"quietStatus", "aria-live":"polite", text: quiet.msg || (S.quietAt ? "Last checked "+fmtDate(new Date(S.quietAt).toISOString())+"." : "")})
+  ]));
 }
 
 /* ---------- Suggested: new shows for each subject, Podcast Index first, Apple Podcasts second ---------- */
@@ -988,6 +1164,13 @@ function renderSettings(top, view){
 
   view.appendChild(syncCard());
 
+  var qn = quietShows().length;
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Quiet shows"}),
+    el("p",{text:"Shows you follow with no new episode in over a year are flagged as candidates to unfollow. The app checks every few days. "+(qn ? qn+" show"+(qn===1?" is":"s are")+" flagged now." : "None are flagged now.")}),
+    el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Review quiet shows", onclick:function(){ go({tab:"home", quiet:true}); }}) ])
+  ]));
+
   var piStatus = el("p",{class:"status", id:"piStatus", "aria-live":"polite", text: hasPI()? "Key saved on this device." : ""});
   var keyInp = el("input",{id:"piKey", type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", value:S.pi.key||"", placeholder:"API key"});
   var secInp = el("input",{id:"piSecret", type:"password", autocomplete:"off", value:S.pi.secret||"", placeholder:"API secret"});
@@ -1050,7 +1233,7 @@ function importOpml(f, status){
       if(i >= feeds.length) return Promise.resolve();
       var f = feeds[i++];
       return matchFeed(f).then(function(sh){
-        if(!S.subs[sh.id]){ S.subs[sh.id] = sh; added++; } if(!sh.itunesId && !sh.piId) unmatched++;
+        if(!S.subs[sh.id]){ sh.fT = Date.now(); S.subs[sh.id] = sh; added++; } if(!sh.itunesId && !sh.piId) unmatched++;
       }).catch(function(){}).then(function(){ done++; status.textContent = "Matching "+done+" of "+feeds.length+" shows…"; save(); return next(); });
     }
     return Promise.all([next(), next(), next()]).then(function(){
@@ -1085,7 +1268,7 @@ function backup(){
 function restore(f){
   f.text().then(function(t){
     var d = JSON.parse(t); if(!d || d.app!=="podcast-player") throw new Error("bad");
-    S.subs = d.subs||{}; normAll(S.subs); S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
+    S.subs = d.subs||{}; normAll(S.subs); Object.keys(S.subs).forEach(function(id){ if(S.unf[id]) S.subs[id].fT = Date.now(); }); S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
     S.posT = {}; Object.keys(S.pos).forEach(function(g){ if(!/#len$/.test(g)) S.posT[g] = Date.now(); });
     if(d.skipBack) S.skipBack = d.skipBack; if(d.skipFwd) S.skipFwd = d.skipFwd; if(typeof d.adSkip==="boolean") S.adSkip = d.adSkip; S.cache = {};
     save(true); applySkipLabels(); toast("Backup restored"); go({tab:"home"});
@@ -1527,7 +1710,7 @@ function dbxUpload(data, rev, keepalive){
 
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
-  return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, now:S.now, nowT:S.nowT||0,
+  return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
     prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
@@ -1552,13 +1735,13 @@ function mergeFields(b, l, r, preferLocal){
 /* base: the copy last seen on Dropbox (null on a device's first sync). local: this device. remote: Dropbox now.
    On a first sync Dropbox's copy wins ties, so a new device takes on the order and settings already set up. */
 function mergeSync(base, local, remote, fresh){
-  var B = base || {subs:{}, fav:[], pos:{}, posT:{}, played:{}, hideSugg:{}, prefs:{}};
+  var B = base || {subs:{}, fav:[], pos:{}, posT:{}, played:{}, hideSugg:{}, unf:{}, keep:{}, prefs:{}};
   var preferLocal = !!base;
   var L = copy(local), R = copy(remote);
-  ["subs","pos","posT","played","hideSugg","prefs"].forEach(function(k){ B[k] = B[k]||{}; L[k] = L[k]||{}; R[k] = R[k]||{}; });
+  ["subs","pos","posT","played","hideSugg","unf","keep","prefs"].forEach(function(k){ B[k] = B[k]||{}; L[k] = L[k]||{}; R[k] = R[k]||{}; });
   B.fav = B.fav||[]; L.fav = L.fav||[]; R.fav = R.fav||[];
   if(fresh){ L.subs = {}; L.fav = []; }
-  var out = {subs:{}, pos:{}, posT:{}, played:{}, hideSugg:{}, prefs:{}};
+  var out = {subs:{}, pos:{}, posT:{}, played:{}, hideSugg:{}, unf:{}, keep:{}, prefs:{}};
 
   // Shows: added on either side stay; removed on either side go, unless the other side added it fresh.
   var ids = {}; [B.subs, L.subs, R.subs].forEach(function(o){ Object.keys(o).forEach(function(id){ ids[id] = 1; }); });
@@ -1568,6 +1751,10 @@ function mergeSync(base, local, remote, fresh){
     if(!l || !r) return;
     out.subs[id] = mergeFields(b, l, r, preferLocal);
   });
+  // Unfollow notes and Keep choices: the newest time for each show wins. A show stays unfollowed
+  // unless it was followed again after the note.
+  ["unf","keep"].forEach(function(k){ [L[k], R[k]].forEach(function(o){ Object.keys(o).forEach(function(id){ var t = +o[id]||0; if(t > (out[k][id]||0)) out[k][id] = t; }); }); });
+  Object.keys(out.unf).forEach(function(id){ var sh = out.subs[id]; if(sh && out.unf[id] > (+sh.fT||0)) delete out.subs[id]; });
 
   // Favorites order.
   var lc = !same(L.fav, B.fav), rc = !same(R.fav, B.fav);
@@ -1601,10 +1788,10 @@ function isFresh(){
   return !lsGet(DBX_BASE) && ids.length===1 && ids[0]===NEWSLINE.id && S.fav.length<=1 && !Object.keys(S.pos).length;
 }
 function applyMerged(m){
-  var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg});
+  var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg, keep:S.keep});
   var lt = cur ? (S.posT[cur.g]||0) : 0;
   var prefsBefore = stable(snap().prefs);
-  S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg;
+  S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
   normAll(S.subs);
   ["speed","skipBack","skipFwd","adSkip","epSort"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
@@ -1623,7 +1810,7 @@ function applyMerged(m){
   }
   save(true, true);
   if(stable(snap().prefs)!==prefsBefore){ applySkipLabels(); $("speedSel").value = String(S.speed||1); if(cur) media.playbackRate = S.speed||1; }
-  var changed = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg})!==before;
+  var changed = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg, keep:S.keep})!==before;
   if(changed && route.tab!=="settings" && !arranging) render();
 }
 function setSync(msg, err){
@@ -1681,7 +1868,7 @@ function holdEnd(){ if(!hold.on) return; hold.on = false; clearTimeout(hold.time
 function syncSoon(ms){ if(!dbx) return; clearTimeout(sync.timer); sync.timer = setTimeout(function(){ syncNow(); }, ms); }
 /* Shows, favorites and settings sync a few seconds after a change. Listening spots ride along,
    and on their own go out every two minutes while playing, on pause, and when the app goes to the background. */
-function keyState(){ var s = snap(); return stable({subs:s.subs, fav:s.fav, played:s.played, hideSugg:s.hideSugg, prefs:s.prefs}); }
+function keyState(){ var s = snap(); return stable({subs:s.subs, fav:s.fav, played:s.played, hideSugg:s.hideSugg, unf:s.unf, keep:s.keep, prefs:s.prefs}); }
 function syncCheck(){
   if(!dbx || sync.busy) return;
   if(keyState()!==sync.syncedKey) syncSoon(3000);
@@ -1764,7 +1951,8 @@ if(S.now && S.now.u){ playEp(S.now, false); }
 render();
 if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(function(){});
 if(dbx) syncNow();
-window.__pp = {S:S, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
+setTimeout(function(){ if(Date.now()-(S.quietAt||0) > QUIET_RESCAN) quietScan(); }, 6000);
+window.__pp = {S:S, quietScan:quietScan, isQuiet:isQuiet, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
 })();
 </script>
 </body>
