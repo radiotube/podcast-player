@@ -11,10 +11,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Podcasts">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/n5pre-180.png">
-<link rel="icon" href="favicon.ico" sizes="any">
-<link rel="icon" type="image/png" sizes="32x32" href="icons/n5pre-32.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icons/n5pre-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/n5pre2-180.png">
+<link rel="icon" href="favicon.ico?v=2" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/n5pre2-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/n5pre2-192.png">
 <style>
 /* Layout: one-screen app. Scrolling content between a top bar and a fixed bottom stack (mini player + tab bar). */
 :root{
@@ -186,10 +186,30 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .stage{flex-direction:column;gap:12px}
 .player.tx .stage img{width:min(30vw,120px,18vh)}
 .player.tx video{max-height:32vh}
-.tx-box{display:none;flex:1 1 auto;min-height:0;width:100%;max-width:640px;overflow-y:auto;background:var(--surface);border-radius:14px;padding:6px 4px}
-.player.tx .tx-box{display:block}
-.cue{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 12px;border-radius:10px;font-size:17px;line-height:1.45;color:var(--muted)}
+.tx-wrap{display:none;position:relative;flex:1 1 auto;min-height:0;width:100%;max-width:640px;flex-direction:column}
+.player.tx .tx-wrap{display:flex}
+.tx-box{flex:1 1 auto;min-height:0;position:relative;overflow-y:auto;overscroll-behavior:contain;background:var(--surface);border-radius:14px;padding:6px 4px;-webkit-mask-image:linear-gradient(transparent,#000 9%,#000 91%,transparent);mask-image:linear-gradient(transparent,#000 9%,#000 91%,transparent)}
+.cue{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 12px;border-radius:10px;font-size:17px;line-height:1.45;color:var(--muted);transition:color .25s,background-color .25s}
 .cue.now{color:var(--fg);background:var(--surface-2)}
+.cue.now.wl .w{color:var(--muted)}
+.cue.now.wl .w.said{color:var(--fg)}
+.cue.now.wl .w.on{color:var(--accent)}
+/* Room above the first line and below the last, so any line can sit in the middle */
+.tx-box::before,.tx-box::after{content:"";display:block;height:var(--txpad,0px)}
+.tx-size,.tx-now{position:absolute;z-index:2;border:0;border-radius:999px;font-weight:650;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.tx-size{top:8px;right:8px;background:var(--surface-2);color:var(--fg);padding:7px 12px;font-size:13px;min-height:34px}
+.tx-now{bottom:14px;left:50%;transform:translateX(-50%);background:var(--accent);color:var(--accent-ink);padding:10px 18px;font-size:15px;min-height:44px}
+.tx-now[hidden],.tx-size[hidden]{display:none}
+/* Bigger transcript view: the artwork steps aside and the words get most of the screen */
+.player.tx.txbig .stage{padding:4px 0;gap:8px}
+.player.tx.txbig .stage img{display:none}
+.player.tx.txbig video{max-height:24vh;min-height:0}
+.player.tx.txbig .tx-wrap{max-width:760px}
+.player.tx.txbig .cue{font-size:20px;line-height:1.5}
+.player.tx.txbig .info .t{font-size:16px}
+.player.tx.txbig .info .s{display:none}
+.player.tx.txbig .scrub{margin-top:6px}
+.player.tx.txbig .transport{margin:2px 0 8px}
 .cue .who{display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
 .tx-msg{padding:16px;color:var(--muted);font-size:15px}
 .tx-msg a{color:var(--accent)}
@@ -253,7 +273,11 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     <img id="bigArt" alt="">
     <video id="video" playsinline webkit-playsinline preload="metadata" hidden></video>
     <audio id="audio" preload="metadata"></audio>
-    <div class="tx-box" id="txBox" aria-label="Transcript"></div>
+    <div class="tx-wrap" id="txWrap">
+      <div class="tx-box" id="txBox" aria-label="Transcript"></div>
+      <button class="tx-size" id="txSize" hidden>Smaller view</button>
+      <button class="tx-now" id="txNow" hidden>Back to now</button>
+    </div>
   </div>
   <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div><div class="trim-info" id="trimInfo" hidden></div></div>
   <div class="scrub">
@@ -831,9 +855,16 @@ function showTrimSel(sh){
   return s;
 }
 function showTrimNote(sh){
-  var r = (S.trimRes||{})[sh.id];
-  return r ? el("p",{class:"status", text:TRIM_MSG[r]}) : document.createTextNode("");
+  var r = (S.trimRes||{})[sh.id], lines = [];
+  if(sh.trimSv >= 1) lines.push("Trimming pauses has saved you "+savedText(sh.trimSv)+" on this show.");
+  if(r) lines.push(TRIM_MSG[r]);
+  return lines.length ? el("p",{class:"status", text:lines.join(" ")}) : document.createTextNode("");
 }
+function savedText(sec){
+  sec = Math.round(sec); var h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return h ? h+" hr "+m+" min" : m ? m+" min"+(m < 10 && s ? " "+s+" sec" : "") : s+" sec";
+}
+function trimSavedAll(){ var t = 0; Object.keys(S.subs).forEach(function(id){ t += S.subs[id].trimSv||0; }); return t; }
 function unfollow(sh){
   dropShow(sh); save(); toast("Unfollowed "+sh.title); go({tab:"home"});
 }
@@ -1193,7 +1224,8 @@ function renderSettings(top, view){
       el("label",{class:"field", for:"trimMinSel"},[ "Pauses longer than", minSel ])
     ]),
     el("p",{text:"Long pauses are cut down to about half a second. Shows that Apple lists as music, drama or fiction, and old time radio shows, stay as they are unless you switch them on on the show's page. Each show's page can also turn it on or off just for that show."}),
-    el("p",{text:"It only works on MP3 episodes from podcast hosts that let the player read the audio, so some shows can't use it. The player says so on the Now Playing screen. It reads each episode a second time, a few minutes ahead of where you are, so it uses about twice the data."})
+    el("p",{text:"It only works on MP3 episodes from podcast hosts that let the player read the audio, so some shows can't use it. The player says so on the Now Playing screen. It reads each episode a second time, a few minutes ahead of where you are, so it uses about twice the data."}),
+    trimSavedAll() >= 1 ? el("p",{class:"status", text:"Saved so far across all shows: "+savedText(trimSavedAll())+". Each show's page shows its own total."}) : document.createTextNode("")
   ]));
 
   view.appendChild(syncCard());
@@ -1382,7 +1414,7 @@ video.addEventListener("loadedmetadata", function(){
   if(has && !cur.v){ cur.v = true; S.now = cur; save(); }
   showVideo(has);
 });
-function openPlayer(){ $("player").classList.add("open"); $("player").setAttribute("aria-hidden","false"); }
+function openPlayer(){ $("player").classList.add("open"); $("player").setAttribute("aria-hidden","false"); txKick(); }
 function closePlayer(){ $("player").classList.remove("open"); $("player").setAttribute("aria-hidden","true"); }
 $("playerClose").onclick = closePlayer; $("miniOpen").onclick = openPlayer;
 function toggle(){ if(!cur) return; if(media.paused){ var p=media.play(); if(p&&p.catch) p.catch(function(){}); } else media.pause(); }
@@ -1651,6 +1683,11 @@ function trimScan(ab, t0, span, keepFrom){
   trimCover(from, end);
 }
 function trimBuffered(t){ var b = media.buffered; for(var i=0;i<b.length;i++){ if(t >= b.start(i) && t <= b.end(i) - 0.3) return true; } return false; }
+/* Counts listening time saved, for Now Playing and the show's running total (kept with the show, so it syncs). */
+function trimSaved(T, d){
+  T.saved += d; trimUI();
+  var sh = S.subs[T.sid]; if(sh){ sh.trimSv = Math.round(((sh.trimSv||0) + d)*10)/10; save(false, true); }
+}
 /* Called as playback moves: jumps over the middle of a long pause, keeping a short pause each side. */
 function trimTick(t){
   var T = TR; if(!T || T.st!=="on" || T.g!==(cur&&cur.g) || media.paused || seeking) return;
@@ -1660,7 +1697,7 @@ function trimTick(t){
     if(r.e - r.s < min) continue;
     if(t >= r.s + TRIM_HEAD - 0.05 && t < r.e - TRIM_TAIL - 0.25){
       var to = r.e - TRIM_TAIL; if(!trimBuffered(to)) return;
-      progSeek = true; try{ media.currentTime = to; T.saved += to - t; trimUI(); }catch(e){ progSeek = false; }
+      progSeek = true; try{ media.currentTime = to; trimSaved(T, (to - t)/(media.playbackRate||1)); }catch(e){ progSeek = false; }
       return;
     }
     // A pause about to start: check again right when it does, between the player's own updates.
@@ -1693,14 +1730,21 @@ function updatePositionState(){
 
 /* ---------- Transcripts (Podcasting 2.0 podcast:transcript) ---------- */
 var cues = [], cueEls = [], cueIdx = -1, txFor = "";
-function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; $("txBox").innerHTML = ""; }
+/* Every word on screen, in order: {s, e, el, c (its line in cues), real (the show timed this word itself), li (screen row)} */
+var words = [], rows = null, wordIdx = -1, follow = true;
+function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; words = []; rows = null; wordIdx = -1; setFollow(true); var box = $("txBox"); box.innerHTML = ""; box.style.removeProperty("--txpad"); $("txSize").hidden = true; }
+function txBig(){ return S.txBig !== false; }
+function txLayout(){ var p = $("player"); p.classList.toggle("txbig", txBig()); $("txSize").textContent = txBig() ? "Smaller view" : "Bigger view"; rows = null; txKick(); }
 $("txBtn").onclick = function(){
   var on = !$("player").classList.contains("tx");
   $("player").classList.toggle("tx", on); this.setAttribute("aria-pressed", String(on)); this.classList.toggle("on", on);
+  txLayout(); setFollow(true);
   if(on && cur && txFor!==cur.g) loadTranscript(cur);
 };
+$("txSize").onclick = function(){ S.txBig = !txBig(); save(false, true); txLayout(); };
+$("txNow").onclick = function(){ setFollow(true); };
 function txMsg(text, link){
-  var box = $("txBox"); box.innerHTML = "";
+  var box = $("txBox"); box.innerHTML = ""; box.style.removeProperty("--txpad"); words = []; rows = null;
   var p = el("p",{class:"tx-msg", text:text}); if(link){ p.appendChild(document.createTextNode(" ")); p.appendChild(el("a",{href:link, target:"_blank", rel:"noopener", text:"Open the transcript in Safari"})); }
   box.appendChild(p);
 }
@@ -1742,7 +1786,8 @@ function mergeCues(list){
   list.forEach(function(c){
     var last = merged[merged.length-1];
     var open = last && last.w===c.w && (last.b.length < 120 || (!/[.?!]["')\]]?$/.test(last.b) && last.b.length < 280));
-    if(open){ last.b += " "+c.b; last.e = c.e; } else merged.push({s:c.s, e:c.e, w:c.w, b:c.b});
+    var piece = {s:c.s, e:c.e, b:c.b};
+    if(open){ last.b += " "+c.b; last.e = c.e; last.ws.push(piece); } else merged.push({s:c.s, e:c.e, w:c.w, b:c.b, ws:[piece]});
   });
   return merged;
 }
@@ -1767,26 +1812,141 @@ function parseTranscript(txt, info){
   var text = /<[a-z][\s\S]*>/i.test(t) ? plain(t) : t;
   return text.split(/\n\s*\n|\n/).map(function(p){return p.trim();}).filter(Boolean).map(function(p){ return {s:-1, e:-1, w:"", b:p}; });
 }
+/* Each timed piece is split into words. A piece that is one word keeps the show's own timing;
+   longer pieces spread their time over their words by length, which is close enough to scroll by. */
+function pieceWords(pc, next){
+  var ws = pc.b.split(/\s+/).filter(Boolean), e = pc.e > pc.s ? pc.e : (next > pc.s ? next : pc.s + ws.length*0.35);
+  var total = ws.reduce(function(a,w){ return a + w.length + 1; }, 0), at = 0;
+  return ws.map(function(w){ var s0 = pc.s + (e-pc.s)*at/total; at += w.length + 1; return {s:s0, e:pc.s + (e-pc.s)*at/total, b:w, real:ws.length===1}; });
+}
 function drawTranscript(){
-  var box = $("txBox"); box.innerHTML = ""; cueEls = []; cueIdx = -1;
+  var box = $("txBox"); box.innerHTML = ""; cueEls = []; cueIdx = -1; words = []; rows = null; wordIdx = -1;
   var timed = cues.some(function(c){return c.s>=0;});
   if(!timed) box.appendChild(el("p",{class:"tx-msg", text:"This transcript has no timings, so it won't follow along."}));
-  cues.forEach(function(c){
-    var b = el(timed?"button":"p",{class:"cue", onclick: timed? function(){ try{ media.currentTime = c.s; }catch(e){} if(media.paused) media.play().catch(function(){}); } : null},[ c.w? el("span",{class:"who", text:c.w}) : null, c.b ]);
+  cues.forEach(function(c, ci){
+    var b = el(timed?"button":"p",{class:"cue"},[ c.w? el("span",{class:"who", text:c.w}) : null ]);
+    if(timed){
+      var list = [], pcs = c.ws && c.ws.length ? c.ws : [{s:c.s, e:c.e, b:c.b}];
+      pcs.forEach(function(pc, k){ var nx = pcs[k+1] ? pcs[k+1].s : (cues[ci+1] ? cues[ci+1].s : 0); list = list.concat(pieceWords(pc, nx)); });
+      /* Some shows time punctuation as words of its own; it belongs on the word before it. */
+      list = list.reduce(function(out, w){ var last = out[out.length-1]; if(last && /^[.,!?;:%)\]}"\u201d\u2019\u2026]+$/.test(w.b)){ last.b += w.b; last.e = Math.max(last.e, w.e); } else out.push(w); return out; }, []);
+      if(list.length && list.every(function(w){ return w.real; })) b.classList.add("wl");
+      list.forEach(function(w, k){
+        var sp = document.createElement("span"); sp.className = "w"; sp.textContent = w.b; sp.setAttribute("data-i", String(words.length));
+        if(k) b.appendChild(document.createTextNode(" ")); b.appendChild(sp);
+        w.el = sp; w.c = ci; words.push(w);
+      });
+    } else b.appendChild(document.createTextNode(c.b));
     cueEls.push(b); box.appendChild(b);
   });
+  $("txSize").hidden = false;
+  box.scrollTop = 0; txPos = 0; setFollow(true);
   syncTranscript(media.currentTime||0);
 }
-function syncTranscript(t){
-  if(!cues.length || !$("player").classList.contains("tx") || cues[0].s<0) return;
-  var i = cueIdx; if(i<0 || t < cues[i].s || (cues[i+1] && t >= cues[i+1].s)){
-    i = -1; for(var k=0;k<cues.length;k++){ if(cues[k].s <= t) i = k; else break; }
-  }
-  if(i===cueIdx) return;
-  if(cueEls[cueIdx]) cueEls[cueIdx].classList.remove("now");
-  cueIdx = i;
-  if(cueEls[i]){ cueEls[i].classList.add("now"); var box = $("txBox"), e = cueEls[i]; box.scrollTo({top: e.offsetTop - box.clientHeight/3, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); }
+/* Tap a word (or a line) to play from there. Words the show timed itself jump to that word. */
+$("txBox").addEventListener("click", function(ev){
+  var w = ev.target.closest && ev.target.closest(".w"), c = ev.target.closest && ev.target.closest(".cue");
+  if(!c || !words.length) return;
+  var i = w ? +w.getAttribute("data-i") : -1, ci = cueEls.indexOf(c);
+  var at = (i>=0 && words[i] && words[i].real) ? words[i].s : (cues[ci] ? cues[ci].s : -1);
+  if(at < 0) return;
+  try{ media.currentTime = at; }catch(e){}
+  if(media.paused) media.play().catch(function(){});
+  setFollow(true);
+});
+function syncTranscript(){ txKick(); }
+
+/* ---------- Following along ----------
+   Like a teleprompter: the view moves at an even pace from one screen row to the next while that
+   row is being spoken, so the words you hear stay in the middle. Runs only while the transcript is on screen. */
+var txPos = 0, txLast = 0, txRun = false, txClock = {m:-1, p:0, t:0}, txHand = {touch:false, wheel:0};
+var calm = matchMedia("(prefers-reduced-motion: reduce)");
+function txShowing(){ var p = $("player"); return p.classList.contains("tx") && p.classList.contains("open") && !document.hidden && words.length > 0; }
+function txKick(){ if(!txRun && txShowing()){ txRun = true; txLast = 0; requestAnimationFrame(txTick); } }
+function setFollow(on){
+  follow = on; $("txNow").hidden = on || !words.length;
+  if(on){ txPos = $("txBox").scrollTop; txKick(); }
 }
+/* The player reports its time a few times a second; between reports, count forward at the playback speed. */
+function heardAt(){
+  var m = media.currentTime||0, p = performance.now();
+  if(m !== txClock.m){ txClock.m = m; txClock.p = p; if(media.paused || m < txClock.t || m > txClock.t + 1) txClock.t = m; else txClock.t = Math.max(m, txClock.t); return txClock.t; }
+  if(media.paused) return txClock.t = m;
+  var t = m + Math.min(1, (p - txClock.p)/1000) * (media.playbackRate||1);
+  return txClock.t = Math.max(txClock.t, t);
+}
+/* Screen rows: where each row of words sits, and when it starts and stops being spoken. */
+function txRows(){
+  var box = $("txBox"), half = Math.round(box.clientHeight/2);
+  if(box.style.getPropertyValue("--txpad") !== half+"px") box.style.setProperty("--txpad", half+"px");
+  rows = []; var r = null;
+  for(var i=0;i<words.length;i++){
+    var w = words[i], top = w.el.offsetTop, h = w.el.offsetHeight;
+    if(!r || Math.abs(top - r.top) > 2){ r = {top:top, y:top + h/2, s:w.s, e:w.e}; rows.push(r); }
+    r.e = Math.max(r.e, w.e); w.li = rows.length-1;
+  }
+  rows.forEach(function(r){ r.m = (r.s + Math.max(r.s, r.e))/2; });
+  rows.half = half;
+}
+function findWord(t){
+  var lo = 0, hi = words.length-1, k = -1;
+  while(lo <= hi){ var mid = (lo+hi)>>1; if(words[mid].s <= t){ k = mid; lo = mid+1; } else hi = mid-1; }
+  return k;
+}
+function markWord(k){
+  if(k === wordIdx) return;
+  var old = words[wordIdx], nw = words[k], ci = nw ? nw.c : -1;
+  if(old){ old.el.classList.remove("on"); }
+  if(old && (!nw || old.c !== ci || k < wordIdx)){ for(var j=wordIdx;j>=0 && words[j].c===old.c;j--) words[j].el.classList.remove("said"); }
+  if(ci !== cueIdx){ if(cueEls[cueIdx]) cueEls[cueIdx].classList.remove("now"); cueIdx = ci; if(cueEls[ci]) cueEls[ci].classList.add("now"); }
+  if(nw){
+    for(var i=k-1;i>=0 && words[i].c===ci && !words[i].el.classList.contains("said");i--) words[i].el.classList.add("said");
+    nw.el.classList.add("on");
+  }
+  wordIdx = k;
+}
+function txTick(now){
+  if(!txShowing()){ txRun = false; return; }
+  var box = $("txBox"), dt = txLast ? Math.min(0.1, (now - txLast)/1000) : 0; txLast = now;
+  if(!rows || rows.half !== Math.round(box.clientHeight/2)) txRows();
+  var t = heardAt(), k = findWord(t);
+  markWord(k);
+  var settled = true;
+  if(follow && !txHand.touch && Date.now() > txHand.wheel && rows.length){
+    var y;
+    if(k < 0) y = rows[0].y;
+    else {
+      /* Each row is dead center halfway through its words; between those moments the view slides evenly. */
+      var li = words[k].li, a = rows[li], b = rows[li+1];
+      if(t < a.m && li > 0){ b = a; a = rows[li-1]; }
+      if(!b || calm.matches) y = rows[li].y;
+      else { var f = b.m > a.m ? (t - a.m)/(b.m - a.m) : 1; y = a.y + (b.y - a.y)*Math.max(0, Math.min(1, f)); }
+    }
+    var target = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, y - rows.half + 6));
+    if(Math.abs(box.scrollTop - txPos) > 3) txPos = box.scrollTop;
+    var gap = target - txPos;
+    if(calm.matches || !dt) txPos = target;
+    else { if(Math.abs(gap) > box.clientHeight*2) txPos = target - Math.sign(gap)*box.clientHeight; txPos += (target - txPos)*(1 - Math.exp(-dt/0.3)); }
+    if(Math.abs(target - txPos) < 0.3) txPos = target; else settled = false;
+    box.scrollTop = txPos;
+  }
+  if(!media.paused || !settled){ requestAnimationFrame(txTick); } else txRun = false;
+}
+/* Scrolling by hand stops the view following along until Back to now (or a tap on a line). */
+(function(){
+  var box = $("txBox"), moved = false;
+  box.addEventListener("touchstart", function(){ txHand.touch = true; moved = false; }, {passive:true});
+  var up = function(){ txHand.touch = false; if(!moved) txKick(); };
+  box.addEventListener("touchend", up, {passive:true}); box.addEventListener("touchcancel", up, {passive:true});
+  box.addEventListener("mousedown", function(ev){ if(ev.target === box){ txHand.touch = true; moved = false; } });
+  window.addEventListener("mouseup", function(){ if(txHand.touch && !("ontouchstart" in window)) up(); });
+  box.addEventListener("wheel", function(){ txHand.wheel = Date.now() + 300; }, {passive:true});
+  box.addEventListener("keydown", function(ev){ if(/^(Arrow|Page|Home|End| )/.test(ev.key)) txHand.wheel = Date.now() + 300; });
+  box.addEventListener("scroll", function(){ if((txHand.touch || Date.now() < txHand.wheel) && follow && words.length){ moved = true; setFollow(false); } }, {passive:true});
+  window.addEventListener("resize", function(){ rows = null; txKick(); });
+  document.addEventListener("visibilitychange", function(){ txKick(); });
+  if(window.ResizeObserver) new ResizeObserver(function(){ rows = null; txKick(); }).observe(box);
+})();
 
 /* ---------- Dropbox sync ----------
    Each person signs in with their own Dropbox. The app gets one folder of its own there
@@ -1964,6 +2124,8 @@ function mergeFields(b, l, r, preferLocal){
   var out = {}, keys = {};
   [b||{}, l, r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = 1; }); });
   Object.keys(keys).forEach(function(k){ var v = pick3((b||{})[k], l[k], r[k], preferLocal); if(v!==undefined) out[k] = copy(v); });
+  // Time saved is a running total, so listening on two devices adds up rather than one side winning.
+  if(l.trimSv || r.trimSv){ var bs = (b && b.trimSv)||0, ls = l.trimSv||0, rs = r.trimSv||0; out.trimSv = b ? Math.max(ls, rs, ls + rs - bs) : Math.max(ls, rs); }
   return out;
 }
 /* base: the copy last seen on Dropbox (null on a device's first sync). local: this device. remote: Dropbox now.
