@@ -1559,13 +1559,13 @@ function trimProbe(){
     if(b[0]===0x49 && b[1]===0x44 && b[2]===0x33) start = 10 + ((b[6]&127)<<21|(b[7]&127)<<14|(b[8]&127)<<7|(b[9]&127)) + ((b[5]&16)?10:0);
     var more = start+8192 > b.length ? trimFetch(start, 65536).then(function(y){ return {b:y.b, at:start}; }) : Promise.resolve({b:b.subarray(start), at:start});
     return more.then(function(z){
-      var fr = mp3Frames(z.b, 0); if(fr.length < 3) throw new Error("format");
+      var fr = mp3Frames(z.b, 0); if(fr.length < 3) throw new Error("format", {cause:"frames "+z.at+" "+z.b.length});
       var h = mp3Hdr(z.b, fr[0]), first = z.b.subarray(fr[0], fr[0]+h.len), tag = "";
       for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = s; break; } }
       var cbr = fr.slice(1, 40).every(function(o){ return mp3Hdr(z.b,o).br===h.br; });
       TR.h = h; TR.audio = z.at + fr[0] + (tag ? h.len : 0);
-      if(tag==="Xing" || tag==="VBRI" || !cbr) throw new Error("format");
-      if(!TR.total) throw new Error("format");
+      if(tag==="Xing" || tag==="VBRI" || !cbr) throw new Error("format", {cause:"vbr "+tag+" "+cbr});
+      if(!TR.total) throw new Error("format", {cause:"nototal"});
       TR.bps = h.br*125; TR.fileDur = (TR.total - TR.audio)/TR.bps;
     });
   });
@@ -1594,7 +1594,7 @@ function trimPump(){
     return trimFetch(from, Math.min(chunk, T.total - from)).then(function(x){
       if(T.dead) return;
       if(x.total && x.total!==T.total) throw new Error("mismatch");
-      var fr = mp3Frames(x.b, 0); if(fr.length < 8) throw new Error("format");
+      var fr = mp3Frames(x.b, 0); if(fr.length < 8) throw new Error("format", {cause:"chunk"});
       var whole = x.b.subarray(fr[0], fr[fr.length-1] + mp3Hdr(x.b, fr[fr.length-1]).len);
       var t0 = (from + fr[0] - T.audio)/T.bps, span = fr.length*T.h.spf/T.h.sr;
       return trimDecode(whole).then(function(ab){ if(!T.dead) trimScan(ab, t0, span, t0 > at - 0.05 ? t0 : at); });
@@ -1604,7 +1604,7 @@ function trimPump(){
     if(!T.dead && r!=="idle") trimTimer = setTimeout(trimPump, 50);
   }, function(e){
     T.busy = false; if(T.dead) return;
-    var m = e && e.message;
+    var m = e && e.message; T.why = String(m)+" "+String(e && e.cause || "")+" "+String(e && e.name || "");
     if(m==="format" || m==="noaudio") return trimFail("format");
     if(m==="mismatch") return trimFail("mismatch");
     var slow = e && e.name==="AbortError";
@@ -2177,7 +2177,7 @@ window.__pp = {S:S, quietScan:quietScan, isQuiet:isQuiet, episodesFor:episodesFo
 </script>
 <div id="dbg" style="position:fixed;top:0;left:0;right:0;z-index:999;background:#ff0;color:#000;font:11px monospace;white-space:pre-wrap;max-height:30vh;overflow:auto;pointer-events:none"></div>
 <script>setInterval(function(){ var T=TR, d=document.getElementById("dbg"); if(!d) return; var b=media.buffered, bs=[]; for(var i=0;i<b.length;i++) bs.push(b.start(i).toFixed(0)+"-"+b.end(i).toFixed(0));
-d.textContent = !T ? "TR none; S.trim="+S.trim : "st="+T.st+" t="+(media.currentTime||0).toFixed(2)+" md="+(media.duration||0).toFixed(1)+" fd="+(T.fileDur||0).toFixed(1)+" br="+(T.h&&T.h.br)+" runs="+T.runs.length+" long="+T.runs.filter(function(r){return r.e-r.s>=(S.trimMin||1);}).length+" cov="+JSON.stringify(T.cov.map(function(c){return [+c[0].toFixed(1),+c[1].toFixed(1)];}))+" saved="+T.saved.toFixed(2)+" buf="+bs.join(",")+" url="+(T.url||"").slice(0,60)+"\nnext runs: "+T.runs.filter(function(r){return r.e>(media.currentTime||0);}).slice(0,6).map(function(r){return r.s.toFixed(2)+"-"+r.e.toFixed(2);}).join(" "); },500);
+d.textContent = !T ? "TR none; S.trim="+S.trim : "st="+T.st+" why="+(T.why||"")+" t="+(media.currentTime||0).toFixed(2)+" md="+(media.duration||0).toFixed(1)+" fd="+(T.fileDur||0).toFixed(1)+" br="+(T.h&&T.h.br)+" runs="+T.runs.length+" long="+T.runs.filter(function(r){return r.e-r.s>=(S.trimMin||1);}).length+" cov="+JSON.stringify(T.cov.map(function(c){return [+c[0].toFixed(1),+c[1].toFixed(1)];}))+" saved="+T.saved.toFixed(2)+" buf="+bs.join(",")+" url="+(T.url||"").slice(0,60)+"\nnext runs: "+T.runs.filter(function(r){return r.e>(media.currentTime||0);}).slice(0,6).map(function(r){return r.s.toFixed(2)+"-"+r.e.toFixed(2);}).join(" "); },500);
 var _st=trimTick; trimTick=function(t){ var before=TR&&TR.saved; _st(t); if(TR && TR.saved!==before) (window.jumps=window.jumps||[]).push([t.toFixed(2), media.currentTime.toFixed(2)]); };</script>
 </body>
 </html>
