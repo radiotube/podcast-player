@@ -1579,6 +1579,8 @@ function drawTranscript(){
     if(timed){
       var list = [], pcs = c.ws && c.ws.length ? c.ws : [{s:c.s, e:c.e, b:c.b}];
       pcs.forEach(function(pc, k){ var nx = pcs[k+1] ? pcs[k+1].s : (cues[ci+1] ? cues[ci+1].s : 0); list = list.concat(pieceWords(pc, nx)); });
+      /* Some shows time punctuation as words of its own; it belongs on the word before it. */
+      list = list.reduce(function(out, w){ var last = out[out.length-1]; if(last && /^[.,!?;:%)\]}"\u201d\u2019\u2026]+$/.test(w.b)){ last.b += w.b; last.e = Math.max(last.e, w.e); } else out.push(w); return out; }, []);
       if(list.length && list.every(function(w){ return w.real; })) b.classList.add("wl");
       list.forEach(function(w, k){
         var sp = document.createElement("span"); sp.className = "w"; sp.textContent = w.b; sp.setAttribute("data-i", String(words.length));
