@@ -656,16 +656,26 @@ function pumpCat(){
     }; })(before));
   }
 }
-/* Every unfinished episode from a subject's shows (or one show), in the sort order set on show pages. */
+/* Every unfinished episode from a subject's shows (or one show), in the order they play: each show's
+   episodes oldest first, one show after another. Shows are ordered by their newest unfinished episode,
+   newest or oldest first as the sort setting says. */
 function queueShows(q){
   if(!q) return [];
   if(q.c) return Object.keys(S.subs).map(function(id){ return S.subs[id]; }).filter(function(sh){ return catsOf(sh).indexOf(q.c)>=0; });
   var sh = S.subs[q.s] || tempShows[q.s]; return sh ? [sh] : [];
 }
 function queueEps(q){
-  var out = [], seen = {};
-  queueShows(q).forEach(function(sh){ var c = S.cache[sh.id]; ((c && c.eps) || []).forEach(function(e){ if(!isPlayed(e.g) && !seen[e.g]){ seen[e.g] = 1; out.push(e); } }); });
-  return byDate(out, S.epSort==="old");
+  var seen = {}, groups = [];
+  queueShows(q).forEach(function(sh){
+    var c = S.cache[sh.id], mine = [];
+    ((c && c.eps) || []).forEach(function(e){ if(!isPlayed(e.g) && !seen[e.g]){ seen[e.g] = 1; mine.push(e); } });
+    if(!mine.length) return;
+    mine = byDate(mine, true);
+    groups.push({eps:mine, t:new Date(mine[mine.length-1].d).getTime()||0, title:sh.title||""});
+  });
+  var oldFirst = S.epSort==="old";
+  groups.sort(function(a,b){ return (oldFirst ? a.t-b.t : b.t-a.t) || a.title.localeCompare(b.title); });
+  return [].concat.apply([], groups.map(function(g){ return g.eps; }));
 }
 /* What plays after this episode: the one below it in the same list, or the top of the list when it was last. */
 function nextAfter(c){
@@ -679,9 +689,9 @@ function renderTopic(view, cat, memberOf){
   var waiting = shows.filter(function(sh){ var ch = S.cache[sh.id]; return !(ch && ch.eps); }).length;
   var list = queueEps(q);
   var sec = el("section");
-  var sortBtn = el("button",{class:"pill-btn", "aria-label":"Sort order: "+(oldFirst?"oldest":"newest")+" first. Tap to change.", text:(oldFirst?"Oldest":"Newest")+" first ⇅", onclick:function(){ S.epSort = oldFirst ? "new" : "old"; save(); keepScroll(render); }});
+  var sortBtn = el("button",{class:"pill-btn", "aria-label":"Show order: "+(oldFirst?"oldest":"newest")+" first. Tap to change.", text:(oldFirst?"Oldest":"Newest")+" shows first ⇅", onclick:function(){ S.epSort = oldFirst ? "new" : "old"; save(); keepScroll(render); }});
   var playAll = list.length ? el("button",{class:"pill-btn on", text:"▶ Play in order", onclick:function(){ var e = list[0]; e.a = e.a || showOf(e.s).art; playEp(e, true, q); }}) : null;
-  sec.appendChild(el("div",{class:"ep-tools", style:"margin-top:12px"},[ el("p",{class:"note", style:"flex:1 1 180px", text: list.length ? list.length+" episode"+(list.length===1?"":"s")+" you haven't finished, from "+shows.length+" show"+(shows.length===1?"":"s")+". When one ends, the next one starts." : ""}), playAll, sortBtn ]));
+  sec.appendChild(el("div",{class:"ep-tools", style:"margin-top:12px"},[ el("p",{class:"note", style:"flex:1 1 180px", text: list.length ? list.length+" episode"+(list.length===1?"":"s")+" you haven't finished, from "+shows.length+" show"+(shows.length===1?"":"s")+". They play top to bottom: each show's episodes oldest first, then the next show. "+(oldFirst ? "Shows with the oldest" : "Shows with the newest")+" episode go first." : ""}), playAll, sortBtn ]));
   if(waiting) sec.appendChild(el("p",{class:"note", style:"margin-top:8px", text:"Loading episodes from "+waiting+" more show"+(waiting===1?"":"s")+"…"}));
   if(!list.length){
     if(waiting){ sec.appendChild(el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"})); }
@@ -956,9 +966,13 @@ function epRow(e, sh, tab, onMark, q){
   var mark = el("button",{class:"icon-btn plain mark"+(played?" on":""), "aria-pressed":String(played), "aria-label": played ? "Played. Tap to mark "+e.t+" as not played" : "Mark "+e.t+" as played", html:ICON.check, onclick:function(){
     setPlayed(e.g, !played); save(); toast(played ? "Marked as not played" : "Marked as played"); if(onMark) onMark();
   }});
+  // A played episode can go back on the list to hear again, from the start.
+  var again = played && !(q && q.c) ? el("button",{class:"pill-btn", text:"Hear again", "aria-label":"Hear "+e.t+" again", onclick:function(){
+    setPlayed(e.g, false); delete S.pos[e.g]; S.posT[e.g] = Date.now(); save(); toast("Back in New to me"+(catsOf(sh).length ? " and in "+catsOf(sh).join(" and ") : "")); if(onMark) onMark();
+  }}) : null;
   var li = el("li",{class:"ep"+(played?" played":"")},[
     el("div",null,[ q && q.c ? el("div",{class:"ep-show", text:sh.title}) : null, when, el("button",{class:"title", text:e.t, "aria-expanded":"false", onclick:function(){ desc.hidden=!desc.hidden; this.setAttribute("aria-expanded", String(!desc.hidden)); }}) ]),
-    el("div",{class:"ep-acts"},[ mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true, q || {s:sh.id}); }}) ]),
+    el("div",{class:"ep-acts"},[ again, mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true, q || {s:sh.id}); }}) ]),
     desc
   ]);
   if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
@@ -1272,7 +1286,7 @@ function renderSettings(top, view){
       el("label",{class:"field", for:"nextSel"},[ "When an episode ends", (function(){ var s = el("select",{id:"nextSel"},[ el("option",{value:"1", text:"Play the next one", selected:S.autoNext!==false}), el("option",{value:"0", text:"Stop", selected:S.autoNext===false}) ]); s.onchange=function(){ S.autoNext = this.value==="1"; save(); }; return s; })() ]),
       el("label",{class:"field", for:"adSel"},[ "Ads marked in chapters", (function(){ var s = el("select",{id:"adSel"},[ el("option",{value:"1", text:"Skip them", selected:S.adSkip}), el("option",{value:"0", text:"Play them", selected:!S.adSkip}) ]); s.onchange=function(){ S.adSkip = this.value==="1"; save(); }; return s; })() ])
     ]),
-    el("p",{text:"The next one comes from the list you started from. In a subject that's its New to me list; on a show's page it's that show's next unfinished episode. The sleep timer's End of episode setting still stops at the end. Each show also has its own Skip at start and Skip at end setting on its page."})
+    el("p",{text:"The next one comes from the list you started from. In a subject that's its New to me list, which plays each show's episodes oldest first, then the next show. On a show's page it's that show's next unfinished episode, oldest first. The sleep timer's End of episode setting still stops at the end. Each show also has its own Skip at start and Skip at end setting on its page."})
   ]));
   var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
   trimSel.onchange = function(){ S.trim = this.value==="1"; save(); trimStart(); };
