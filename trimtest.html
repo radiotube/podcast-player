@@ -1480,6 +1480,7 @@ var TRIM_AHEAD = 300, TRIM_HEAD = 0.3, TRIM_TAIL = 0.2, TRIM_MINS = [0.75,1,1.5,
 var TRIM_MSG = {
   blocked:"Can't trim pauses on this show. Its host doesn't let the player read the audio.",
   format:"Can't trim pauses on this episode. It only works on MP3 episodes.",
+  vbr:"Can't trim pauses on this show. Its episodes use variable bitrate MP3, which the player can't line up exactly.",
   mismatch:"Can't trim pauses on this episode. The copy the player reads doesn't line up with what's playing, often because of inserted ads.",
   error:"Pause trimming stopped for this episode. The show's server didn't answer."
 };
@@ -1513,7 +1514,7 @@ function trimStart(){
     trimUI(); trimPump();
   });
 }
-function trimFail(st){ if(!TR) return; TR.st = st; S.trimRes = S.trimRes||{}; if(st==="blocked" || st==="format") { S.trimRes[TR.sid] = st; save(); } trimUI(); }
+function trimFail(st){ if(!TR) return; TR.st = st; S.trimRes = S.trimRes||{}; if(st==="blocked" || st==="format" || st==="vbr") { S.trimRes[TR.sid] = st; save(); } trimUI(); }
 /* MP3 frame headers (Layer III only). */
 var MP3_BR1 = [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320], MP3_BR2 = [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
 var MP3_SR = {3:[44100,48000,32000], 2:[22050,24000,16000], 0:[11025,12000,8000]};
@@ -1563,10 +1564,9 @@ function trimProbe(){
       var h = mp3Hdr(z.b, fr[0]), first = z.b.subarray(fr[0], fr[0]+h.len), tag = "";
       for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = s; break; } }
       var cbr = fr.slice(1, 40).every(function(o){ return mp3Hdr(z.b,o).br===h.br; });
-      TR.h = h; TR.audio = z.at + fr[0] + (tag ? h.len : 0);
-      if(tag==="Xing" || tag==="VBRI" || !cbr) throw new Error("format", {cause:"vbr "+tag+" "+cbr});
+      if(tag==="Xing" || tag==="VBRI" || !cbr) throw new Error("vbr", {cause:tag+" "+cbr});
       if(!TR.total) throw new Error("format", {cause:"nototal"});
-      TR.bps = h.br*125; TR.fileDur = (TR.total - TR.audio)/TR.bps;
+      TR.audio = z.at + fr[0] + (tag ? h.len : 0); TR.h = h; TR.bps = h.br*125; TR.fileDur = (TR.total - TR.audio)/TR.bps;
     });
   });
 }
@@ -1606,7 +1606,7 @@ function trimPump(){
     T.busy = false; if(T.dead) return;
     var m = e && e.message; T.why = String(m)+" "+String(e && e.cause || "")+" "+String(e && e.name || "");
     if(m==="format" || m==="noaudio") return trimFail("format");
-    if(m==="mismatch") return trimFail("mismatch");
+    if(m==="mismatch" || m==="vbr") return trimFail(m);
     var slow = e && e.name==="AbortError";
     if(m==="norange") return trimFail("blocked");
     if(!T.h && !slow) return trimFail(e && e.http ? "error" : "blocked");
@@ -1656,7 +1656,7 @@ function trimTick(t){
 }
 [audio, video].forEach(function(m){
   m.addEventListener("seeked", function(){ if(m===media && TR && !TR.busy) trimPump(); });
-  m.addEventListener("loadedmetadata", function(){ if(m===media && TR && TR.h && trimLenOk()===false) trimFail("mismatch"); });
+  m.addEventListener("loadedmetadata", function(){ if(m===media && TR && TR.st==="on" && trimLenOk()===false) trimFail("mismatch"); });
 });
 
 function setMediaSession(){
@@ -2173,8 +2173,16 @@ if("serviceWorker" in navigator && location.protocol==="https:") navigator.servi
 if(dbx) syncNow();
 setTimeout(function(){ if(Date.now()-(S.quietAt||0) > QUIET_RESCAN) quietScan(); }, 6000);
 window.__pp = {S:S, quietScan:quietScan, isQuiet:isQuiet, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
+
+var AL={on:/align/.test(location.search), lv:[]};
+if(AL.on){ audio.crossOrigin="anonymous"; audio.addEventListener("play", function(){ if(AL.ctx) return; AL.ctx=new AudioContext(); var src=AL.ctx.createMediaElementSource(audio); AL.an=AL.ctx.createAnalyser(); AL.an.fftSize=1024; src.connect(AL.an); AL.an.connect(AL.ctx.destination); var buf=new Float32Array(1024);
+  setInterval(function(){ if(audio.paused) return; AL.an.getFloatTimeDomainData(buf); var s=0; for(var i=0;i<buf.length;i++) s+=buf[i]*buf[i]; AL.lv.push([audio.currentTime, 10*Math.log10(s/buf.length+1e-12)]); if(AL.lv.length>20000) AL.lv.shift(); }, 20); }); }
+function alignReport(){ if(!TR||!AL.lv.length) return ""; var inq=[], on=[], out=[];
+  AL.lv.forEach(function(p){ var t=p[0], r=TR.runs.filter(function(r){return t>=r.s+0.08&&t<=r.e-0.08;})[0]; if(r) inq.push(p[1]); else if(TR.runs.some(function(r){return t>r.e+0.03&&t<r.e+0.25;})) on.push(p[1]); else out.push(p[1]); });
+  function avg(a){ return a.length? (a.reduce(function(x,y){return x+y;},0)/a.length).toFixed(1) : "-"; } function q(a){ return a.length? Math.round(100*a.filter(function(x){return x<-45;}).length/a.length)+"%" : "-"; }
+  return "\nALIGN in-run n="+inq.length+" avg="+avg(inq)+" quiet="+q(inq)+" | onset n="+on.length+" avg="+avg(on)+" quiet="+q(on)+" | other n="+out.length+" avg="+avg(out)+" quiet="+q(out)+" | jumps="+JSON.stringify((window.jumps||[]).slice(-5)); }
 setInterval(function(){ var T=TR, d=document.getElementById("dbg"); if(!d) return; var b=media.buffered, bs=[]; for(var i=0;i<b.length;i++) bs.push(b.start(i).toFixed(0)+"-"+b.end(i).toFixed(0));
-d.textContent = !T ? "TR none; S.trim="+S.trim : "st="+T.st+" why="+(T.why||"")+" t="+(media.currentTime||0).toFixed(2)+" md="+(media.duration||0).toFixed(1)+" fd="+(T.fileDur||0).toFixed(1)+" br="+(T.h&&T.h.br)+" runs="+T.runs.length+" long="+T.runs.filter(function(r){return r.e-r.s>=(S.trimMin||1);}).length+" cov="+JSON.stringify(T.cov.map(function(c){return [+c[0].toFixed(1),+c[1].toFixed(1)];}))+" saved="+T.saved.toFixed(2)+" buf="+bs.join(",")+" url="+(T.url||"").slice(0,60)+"\nnext runs: "+T.runs.filter(function(r){return r.e>(media.currentTime||0);}).slice(0,6).map(function(r){return r.s.toFixed(2)+"-"+r.e.toFixed(2);}).join(" "); },500);
+d.textContent = !T ? "TR none; S.trim="+S.trim : "st="+T.st+" why="+(T.why||"")+" t="+(media.currentTime||0).toFixed(2)+" md="+(media.duration||0).toFixed(1)+" fd="+(T.fileDur||0).toFixed(1)+" br="+(T.h&&T.h.br)+" runs="+T.runs.length+" long="+T.runs.filter(function(r){return r.e-r.s>=(S.trimMin||1);}).length+" cov="+JSON.stringify(T.cov.map(function(c){return [+c[0].toFixed(1),+c[1].toFixed(1)];}))+" saved="+T.saved.toFixed(2)+" buf="+bs.join(",")+" url="+(T.url||"").slice(0,60)+"\nnext runs: "+T.runs.filter(function(r){return r.e>(media.currentTime||0);}).slice(0,6).map(function(r){return r.s.toFixed(2)+"-"+r.e.toFixed(2);}).join(" ")+alignReport()+" rate="+media.playbackRate+" wall="+Math.round(performance.now()/1000); },500);
 var _st=trimTick; trimTick=function(t){ var before=TR&&TR.saved; _st(t); if(TR && TR.saved!==before) (window.jumps=window.jumps||[]).push([t.toFixed(2), media.currentTime.toFixed(2)]); };
 })();
 </script>
