@@ -850,15 +850,20 @@ function showTrimSel(sh){
   var autoText = function(){ return "Same as Settings ("+(!S.trim ? "off" : isMusicShow(sh) ? "off, music or drama" : "on")+")"; };
   var auto = el("option",{value:"", text:autoText(), selected:!trimMode(sh)});
   var s = el("select",{id:"showTrimSel"},[ auto, el("option",{value:"on", text:"On for this show", selected:trimMode(sh)==="on"}), el("option",{value:"off", text:"Off for this show", selected:trimMode(sh)==="off"}) ]);
-  s.onchange = function(){ if(this.value) sh.trim = this.value; else delete sh.trim; save(); if(cur && cur.s===sh.id) trimStart(); };
+  s.onchange = function(){ if(this.value) sh.trim = this.value; else delete sh.trim; save(); var n = $("showTrimNote"); if(n && n.fill) n.fill(); if(cur && cur.s===sh.id) trimStart(); };
   needGenre(sh).then(function(){ auto.textContent = autoText(); });
   return s;
 }
 function showTrimNote(sh){
-  var r = (S.trimRes||{})[sh.id], lines = [];
-  if(sh.trimSv >= 1) lines.push("Trimming pauses has saved you "+savedText(sh.trimSv)+" on this show.");
-  if(r) lines.push(TRIM_MSG[r]);
-  return lines.length ? el("p",{class:"status", text:lines.join(" ")}) : document.createTextNode("");
+  var p = el("p",{class:"status", id:"showTrimNote"});
+  var fill = function(){
+    var r = (S.trimRes||{})[sh.id], on = trimWanted(sh), lines = [ on ? "Pause trimming is on for this show." : "Pause trimming is off for this show." ];
+    if(on || sh.trimSv >= 1) lines.push("Time saved so far: "+savedText(sh.trimSv||0)+".");
+    if(r && on) lines.push(TRIM_MSG[r]);
+    p.textContent = lines.join(" ");
+  };
+  fill(); p.fill = fill; needGenre(sh).then(fill);
+  return p;
 }
 function savedText(sec){
   sec = Math.round(sec); var h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
@@ -1225,7 +1230,7 @@ function renderSettings(top, view){
     ]),
     el("p",{text:"Long pauses are cut down to about half a second. Shows that Apple lists as music, drama or fiction, and old time radio shows, stay as they are unless you switch them on on the show's page. Each show's page can also turn it on or off just for that show."}),
     el("p",{text:"It only works on MP3 episodes from podcast hosts that let the player read the audio, so some shows can't use it. The player says so on the Now Playing screen. It reads each episode a second time, a few minutes ahead of where you are, so it uses about twice the data."}),
-    trimSavedAll() >= 1 ? el("p",{class:"status", text:"Saved so far across all shows: "+savedText(trimSavedAll())+". Each show's page shows its own total."}) : document.createTextNode("")
+    S.trim || trimSavedAll() >= 1 ? el("p",{class:"status", text:"Time saved so far across all shows: "+savedText(trimSavedAll())+". Each show's page shows its own total and whether trimming is on for it."}) : document.createTextNode("")
   ]));
 
   view.appendChild(syncCard());
@@ -1532,9 +1537,14 @@ function needGenre(sh){
 }
 function trimUI(){
   var box = $("trimInfo"); if(!box) return;
-  if(!TR){ box.hidden = true; return; }
+  if(!TR){
+    // Say so when trimming is on in Settings but this show is left out, so it's clear nothing is wrong.
+    var sh = S.trim && cur && !cur.v && media!==video ? showOf(cur.s) : null;
+    box.hidden = !(sh && !trimWanted(sh)); box.classList.add("off"); box.textContent = "Pause trimming is off for this show";
+    return;
+  }
   box.hidden = false; box.classList.toggle("off", TR.st!=="on" && TR.st!=="start");
-  box.textContent = TRIM_MSG[TR.st] || ("Trimming long pauses" + (TR.saved>=1 ? " · "+fmt(TR.saved)+" saved" : ""));
+  box.textContent = TRIM_MSG[TR.st] || (TR.st==="start" ? "Checking this episode for long pauses" : "Trimming long pauses · " + (TR.saved>=1 ? fmt(TR.saved)+" saved" : "none long enough yet"));
 }
 function trimStop(){ if(TR){ TR.dead = true; if(TR.ctl) try{ TR.ctl.abort(); }catch(e){} } TR = null; clearTimeout(trimTimer); trimUI(); }
 function trimStart(){
@@ -1542,7 +1552,8 @@ function trimStart(){
   if(!cur || media===video || cur.v) return;
   var c = cur, sh = showOf(c.s);
   needGenre(sh).then(function(){
-    if(cur!==c || !trimWanted(sh)) return;
+    if(cur!==c) return;
+    if(!sh || !trimWanted(sh)) return trimUI();
     var u = String(c.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
     TR = {g:c.g, sid:c.s, u:u, url:u, runs:[], cov:[], saved:0, st:"start", tries:0};
     trimUI(); trimPump();
