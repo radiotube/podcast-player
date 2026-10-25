@@ -1254,7 +1254,8 @@ function dbxErr(j, status){
   j = j || {};
   var m = j.error_summary || j.error_description || (typeof j.error==="string" ? j.error : "") || "";
   m = String(m).replace(/\/\.+$|\/+$/,"");
-  return m ? m+(status ? " (HTTP "+status+")" : "") : "HTTP "+status;
+  var um = j.user_message && j.user_message.text ? " ["+j.user_message.text+"]" : "";
+  return (m ? m+(status ? " (HTTP "+status+")" : "") : "HTTP "+status) + um;
 }
 function errText(e){
   if(!e) return "unknown error";
@@ -1297,7 +1298,7 @@ function gotTokens(j){
 }
 function dbxSignOut(){
   var tok = dbx && dbx.access;
-  if(tok) fetch("https://api.dropboxapi.com/2/auth/token/revoke", {method:"POST", headers:{Authorization:"Bearer "+tok}}).catch(function(){});
+  if(tok) fetch("https://api.dropboxapi.com/2/auth/token/revoke?"+qs({authorization:"Bearer "+tok}), {method:"POST"}).catch(function(){});
   dbx = null; lsSet(DBX_AUTH, null); lsSet(DBX_BASE, null); lsSet(DBX_PEND, null);
   clearTimeout(sync.timer); sync.msg = ""; sync.err = false; sync.sent = "";
 }
@@ -1319,10 +1320,20 @@ function dbxToken(force){
   dbxToken.p.then(clear, clear);
   return dbxToken.p;
 }
+/* Dropbox's browser-friendly form: the sign-in token and arguments go in the address and the body is
+   marked text/plain, so the browser sends a plain request with no extra headers to drop or pre-check.
+   (Safari was sending these requests without the sign-in header, and Dropbox answered "other".) */
 function dbxCall(url, headers, body, keepalive, retried){
   return dbxToken(retried).then(function(tok){
-    var h = {Authorization:"Bearer "+tok}; for(var k in headers) h[k] = headers[k];
-    return dbxFetch(url, {method:"POST", headers:h, body:body, cache:"no-store"});
+    if(!tok || typeof tok!=="string"){
+      if(!retried) return dbxCall(url, headers, body, keepalive, true);
+      dbxLost(); throw new Error("signedout");
+    }
+    var q = {authorization:"Bearer "+tok};
+    if(headers && headers["Dropbox-API-Arg"]) q.arg = headers["Dropbox-API-Arg"];
+    var opts = {method:"POST"};
+    if(body!=null){ opts.body = body; opts.headers = {"Content-Type":"text/plain; charset=dropbox-cors-hack"}; }
+    return dbxFetch(url+"?"+qs(q), opts);
   }).then(function(r){ return (r.status===401 && !retried) ? dbxCall(url, headers, body, keepalive, true) : r; });
 }
 function dbxJson(r){ return r.json().catch(function(){ return {}; }); }
