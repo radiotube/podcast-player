@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><script>
+var s = JSON.parse(localStorage.getItem("pp.v1")||"null") || {};
+s.subs = {
+ "t1":{id:"t1",title:"Test Show Alpha",author:"A",feed:"",art:"",cats:["Ham Radio","Favorites"]},
+ "t2":{id:"t2",title:"Test Show Beta",author:"B",feed:"",art:"",cats:["Cooking"]},
+ "t3":{id:"t3",title:"Test Show Gamma",author:"C",feed:"",art:"",cats:["Photography","Favorites"]},
+ "t4":{id:"t4",title:"Test Show Delta",author:"D",feed:"",art:"",cats:["Business"]}
+};
+s.fav = []; s.catOrder = []; s.cache = {};
+localStorage.setItem("pp.v1", JSON.stringify(s));
+document.write("seeded");
+</script>
