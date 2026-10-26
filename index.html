@@ -372,18 +372,18 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[]};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[], dbxBase:null};}
 var S = load();
 function load(){
   var s = null, raw = null;
   try{ raw = localStorage.getItem(KEY); }catch(e){}
   try{ s = JSON.parse(raw||"null"); }catch(e){ s = null; }
-  if(!s || typeof s !== "object"){
-    s = blank();
-    // This device's saved copy is gone or unreadable. Forget the Dropbox copy it last saw too, so the next
-    // sync takes on Dropbox's copy instead of reading every show missing here as one removed here.
-    try{ localStorage.removeItem("pp.dbx.base"); }catch(e){}
-  }
+  if(!s || typeof s !== "object") s = blank();
+  // The copy last seen on Dropbox now lives inside this saved copy (dbxBase), so the two are always saved
+  // together. It used to be kept apart, and when one was saved and the other wasn't (a full storage, or a
+  // second open window), sync read this device's older copy as fresh changes and undid newer ones. The old,
+  // separate one is dropped, and the first sync after the update lets Dropbox's copy win.
+  try{ localStorage.removeItem("pp.dbx.base"); }catch(e){}
   var b = blank(); for(var k in b){ if(!(k in s)) s[k] = b[k]; }
   if(!s.seeded){ s.subs[NEWSLINE.id] = NEWSLINE; if(s.fav.indexOf(NEWSLINE.id)<0) s.fav.unshift(NEWSLINE.id); s.seeded = true; }
   s.fav = s.fav.filter(function(id){return s.subs[id];});
@@ -3019,7 +3019,9 @@ function makeCard(){
    Sign-in uses PKCE, so the App key below is public and no app secret exists. */
 var DBX_APP_KEY = "9yk2nzxp65t5krk";
 var DBX_FILE = "/sync.json";
-var DBX_AUTH = "pp.dbx", DBX_BASE = "pp.dbx.base", DBX_PEND = "pp.dbx.pending";
+var DBX_AUTH = "pp.dbx", DBX_PEND = "pp.dbx.pending";
+function getBase(){ return S.dbxBase || null; }
+function setBase(d){ S.dbxBase = d ? copy(d) : null; save(true, true); }
 function lsGet(k){ try{ return JSON.parse(localStorage.getItem(k)||"null"); }catch(e){ return null; } }
 function lsSet(k, v){ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
 function dbxKey(){ var o = null; try{ o = localStorage.getItem("pp.dbx.key"); }catch(e){} return DBX_APP_KEY || o || ""; }
@@ -3091,7 +3093,7 @@ function dbxUseCode(code){
 }
 function gotTokens(j){
   dbx = {refresh:j.refresh_token||"", access:j.access_token, exp:Date.now()+(j.expires_in||14400)*1000, name:"", email:""};
-  lsSet(DBX_AUTH, dbx); lsSet(DBX_PEND, null); lsSet(DBX_BASE, null); sync.orphan = ""; sync.sent = "";
+  lsSet(DBX_AUTH, dbx); lsSet(DBX_PEND, null); setBase(null); sync.orphan = ""; sync.sent = "";
   return dbxApi("users/get_current_account", null).then(function(a){
     dbx.name = (a.name && a.name.display_name) || ""; dbx.email = a.email||""; lsSet(DBX_AUTH, dbx);
   }, function(){}).then(function(){ return syncNow(); });
@@ -3099,11 +3101,11 @@ function gotTokens(j){
 function dbxSignOut(){
   var tok = dbx && dbx.access;
   if(tok) fetch("https://api.dropboxapi.com/2/auth/token/revoke?"+qs({authorization:"Bearer "+tok}), {method:"POST"}).catch(function(){});
-  dbx = null; lsSet(DBX_AUTH, null); lsSet(DBX_BASE, null); lsSet(DBX_PEND, null);
+  dbx = null; lsSet(DBX_AUTH, null); setBase(null); lsSet(DBX_PEND, null);
   clearTimeout(sync.timer); sync.msg = ""; sync.err = false; sync.sent = "";
 }
 function dbxLost(){
-  dbx = null; lsSet(DBX_AUTH, null); lsSet(DBX_BASE, null);
+  dbx = null; lsSet(DBX_AUTH, null); setBase(null);
   setSync("Dropbox sign-in ended. Sign in again to keep syncing.", true); toast("Dropbox sign-in ended. Sign in again in Settings.");
 }
 function dbxToken(force){
@@ -3276,7 +3278,7 @@ function mergeSync(base, local, remote, fresh){
 }
 function isFresh(){
   var ids = Object.keys(S.subs);
-  return !lsGet(DBX_BASE) && ids.length===1 && ids[0]===NEWSLINE.id && S.fav.length<=1 && !Object.keys(S.pos).length;
+  return !getBase() && ids.length===1 && ids[0]===NEWSLINE.id && S.fav.length<=1 && !Object.keys(S.pos).length;
 }
 function applyMerged(m){
   var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg, keep:S.keep});
@@ -3318,7 +3320,7 @@ function syncedLabel(){
 }
 function runSync(tries, keepalive){
   return dbxDownload().then(function(remote){
-    var baseRec = lsGet(DBX_BASE), base = baseRec && baseRec.data;
+    var base = getBase();
     var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
     var local = copy(snap());
     var merged = rd ? mergeSync(base, local, rd, !base && isFresh()) : local;
@@ -3327,9 +3329,9 @@ function runSync(tries, keepalive){
     if(lost.length){ var ge = new Error("Sync stopped so it wouldn't remove "+lost.length+" show"+(lost.length===1?"":"s")+" from Dropbox. Nothing was changed. Earlier copies, below, can put a good copy back."); ge.guard = true; throw ge; }
     applyMerged(merged);
     var out = copy(snap());
-    if(rd && same(out, pickSnap(rd))){ lsSet(DBX_BASE, {data:out}); return; }
+    if(rd && same(out, pickSnap(rd))){ setBase(out); return; }
     var file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
-    return dbxUpload(file, remote && remote.rev, keepalive).then(function(){ lsSet(DBX_BASE, {data:out}); }, function(e){
+    return dbxUpload(file, remote && remote.rev, keepalive).then(function(){ setBase(out); }, function(e){
       if(e.conflict && tries < 3) return runSync(tries+1, false);
       throw e;
     });
@@ -3432,12 +3434,12 @@ function histUse(e){
     var go = function(){
       return dbxDownload().then(function(remote){
         var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
-        var baseRec = lsGet(DBX_BASE), now = rd ? mergeSync(baseRec && baseRec.data, copy(snap()), rd, false) : copy(snap());
+        var now = rd ? mergeSync(getBase(), copy(snap()), rd, false) : copy(snap());
         // The old copy goes in as Dropbox's side of a first sync: its shows join what's here, and its order and settings win.
         var m = mergeSync(null, now, pickSnap(old), false);
         applyMerged(m);
         var out = copy(snap()), file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
-        return dbxUpload(file, remote && remote.rev).then(function(){ lsSet(DBX_BASE, {data:out}); }, function(err){
+        return dbxUpload(file, remote && remote.rev).then(function(){ setBase(out); }, function(err){
           if(err.conflict && ++tries < 3) return go();
           throw err;
         });
