@@ -2350,7 +2350,7 @@ function madeTranscript(c, msg){
       drawTranscript("Made by this app with speech recognition, so it may have mistakes."); mkUI(); return;
     }
     txKind = "none";
-    txMsg(msg + (mkOn() || c.v ? "" : " You can also have the app make one: turn on Make transcripts in Settings."));
+    txMsg(msg + (dbx || c.v ? "" : " This device isn't signed in to Dropbox, so transcripts made on your other devices can't show here. Sign in under Settings, Sync with Dropbox.") + (mkOn() || c.v ? "" : " You can also have the app make one: turn on Make transcripts in Settings."));
     mkUI();
   });
 }
@@ -2670,7 +2670,7 @@ function mkFind(sid, g){
     if(mkMade[key]) return mkMade[key];
     return mkGetLocal("tx", key).then(function(o){
       if(o && o.segs) return (mkMade[key] = o);
-      if(mkMiss[key] && Date.now()-mkMiss[key] < 10*60*1000) return null;
+      if(mkMiss[key] && Date.now()-mkMiss[key] < 2*60*1000) return null;
       return mkDbxGet(key).then(function(d){
         if(d && d.segs){ d.up = true; mkMade[key] = d; mkPutLocal("tx", key, d); return d; }
         mkMiss[key] = Date.now(); return null;
@@ -3019,7 +3019,7 @@ function mkAutoHave(){
   var have = {};
   var add = function(j){ (j.entries||[]).forEach(function(x){ var m = /^([0-9a-f]+)\.json$/.exec(x.name||""); if(m) have[m[1]] = 1; }); return j.has_more ? dbxApi("files/list_folder/continue", {cursor:j.cursor}).then(add) : have; };
   return dbxApi("files/list_folder", {path:"/transcripts", limit:2000}).then(add, function(e){ if(/not_found/.test(String(e && e.message))) return have; throw e; })
-    .then(function(h){ MKA.have = h; MKA.haveAt = Date.now(); return h; });
+    .then(function(h){ MKA.have = h; MKA.haveAt = Date.now(); Object.keys(h).forEach(function(k){ delete mkMiss[k]; }); return h; });
 }
 function mkAutoHasOwn(e){ return !!(e.tr && e.tr.length); }
 function mkAutoWanted(e){ return e && e.u && !e.v && !isVideo(e.ty, e.u) && !mkAutoHasOwn(e) && !isPlayed(e.g) && !mkAutoNoted(e.g); }
@@ -3091,6 +3091,7 @@ function mkAutoText(){
   if(n && !MKA.busy) t = t.replace(/[.…]?\s*$/, function(m){ return m.trim() ? m.trim() : "."; })+" "+n+" more waiting.";
   if(S.mkAutoPaused && J) t = "Paused. "+t;
   if(document.hidden) t += " It waits while the app is off screen.";
+  if(!dbx) t += " This device isn't signed in to Dropbox, so what it makes stays here until you sign in.";
   return t;
 }
 var mkAutoEls = null;
@@ -3102,7 +3103,7 @@ function mkAutoShow(){
 }
 mkRows.push({row:{get isConnected(){ return true; }}, fn:mkAutoShow});
 setTimeout(mkAutoRun, 20000);
-document.addEventListener("visibilitychange", function(){ if(!document.hidden) mkAutoSoon(2000); });
+document.addEventListener("visibilitychange", function(){ if(!document.hidden){ mkMiss = {}; mkAutoSoon(2000); } });
 
 /* Stops one the app was making on its own, without pausing; it can pick up from there later. */
 function mkAutoQuit(){ if(MK && MK.auto && !MK.dead){ MK.bumped = true; mkStop(); } MKA.q = []; MKA.at = 0; }
