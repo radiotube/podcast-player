@@ -2716,7 +2716,7 @@ function mkStep(){
         else if(tail.e >= 5) cut = tail.e;
       }
       lines.forEach(function(l){
-        if(MK_JUNK.test(l.b)) return;
+        if(MK_JUNK.test(l.b) || !/[0-9A-Za-z\u00C0-\u024F]/.test(l.b)) return;
         var s = J.bufT + l.s, e = J.bufT + Math.min(l.e==null ? sec : l.e, sec);
         J.segs.push([Math.round(s*100)/100, Math.round(Math.max(s, e)*100)/100, l.b]);
       });
@@ -2841,7 +2841,7 @@ function mkShowLive(final){
   cues = segCues(J.segs); drawTranscript(final ? "Made by this app with speech recognition, so it may have mistakes." : "Being made now. More appears as the app works through the episode.");
   if(!was && words.length){ box.scrollTop = top; setFollow(false); }
 }
-function segCues(segs){ return mergeCues(segs.map(function(s){ return {s:s[0], e:s[1], w:"", b:s[2]}; })); }
+function segCues(segs){ return mergeCues(segs.filter(function(s){ return s && String(s[2]).trim(); }).map(function(s){ return {s:s[0], e:s[1], w:"", b:s[2]}; })); }
 
 function makeCard(){
   var on = mkOn();
