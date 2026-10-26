@@ -6,7 +6,7 @@ A podcast player web app for iPhone and iPad that installs to the Home Screen fr
 - Favorites in the order you set (drag or arrows), plus subjects you name yourself; a show can sit under several subjects, and a subject lists only shows with something left to hear
 - Each show has a Recent tab (every episode, marked New, time left or Played) and a New to me tab (not finished yet), sorted newest or oldest first
 - Each episode row shows the start of its description; tap the title to open its details (date, length, where you are, chapters, and the full show notes with working links)
-- Skip and highlight words in Settings: episodes whose title or description mentions a skip word count as played (shown as Skipped, and Hear again brings one back); ones that mention a highlight word stand out with the word under the title
+- Skip and highlight words in Settings: episodes whose title or description mentions a skip word count as played (shown as Skipped, and Hear again brings one back); ones that mention a highlight word stand out with the word under the title. A highlight always beats a skip. Transcripts the app makes are checked too: one mention highlights, a skip word needs 3 mentions, and the episode says when the match came from its transcript
 - Search: Podcast Index first (with your own free key, saved on your device), Apple Podcasts second
 - Skip back and forward amounts you choose, per-show skip at start and end, and skipping of ads a show marks in its chapters
 - Transcripts when a show publishes them (Podcasting 2.0), following along as it plays
