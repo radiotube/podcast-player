@@ -428,12 +428,13 @@ function plain(html){
    an allowed list: text, paragraphs, lists, bold and italics, and web links that open in a new tab.
    Scripts, styles, pictures, frames and forms are left out. */
 var NOTES = {}, notesTried = {};
-function keepNotes(g, html){ if(g && html) NOTES[g] = String(html).slice(0, 60000); }
+function keepNotes(g, html, base){ if(g && html) NOTES[g] = {h:String(html).slice(0, 60000), b:base||""}; }
 var NOTE_DROP = /^(script|style|iframe|frame|frameset|object|embed|applet|svg|math|template|noscript|form|input|button|select|option|textarea|head|title|meta|link|base|video|audio|source|track|canvas|picture|img|map|area)$/;
 var NOTE_TAG = {p:"p", br:"br", a:"a", b:"strong", strong:"strong", i:"em", em:"em", u:"u", ul:"ul", ol:"ol", li:"li", blockquote:"blockquote",
   h1:"h4", h2:"h4", h3:"h4", h4:"h4", h5:"h4", h6:"h4", pre:"p", hr:"hr", div:"div", tr:"div", section:"div", article:"div", dt:"div", dd:"div", code:"code"};
 var URL_RE = /\bhttps?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]}]/gi;
-function safeHref(h){ h = String(h||"").trim(); return /^(https?:\/\/|mailto:)/i.test(h) ? h : ""; }
+// Links the show wrote relative to its own site are completed from the episode's page or the feed.
+function safeHref(h, base){ h = String(h||"").trim(); if(!h || h.charAt(0)==="#") return ""; try{ h = new URL(h, base || undefined).href; }catch(e){} return /^(https?:\/\/|mailto:)/i.test(h) ? h : ""; }
 function noteLink(href, kids){ var a = el("a",{href:href, target:"_blank", rel:"noopener noreferrer"}); kids.forEach(function(k){ a.appendChild(k); }); return a; }
 // Plain web addresses in the text become links too.
 function noteText(dst, text, inLink){
@@ -444,7 +445,7 @@ function noteText(dst, text, inLink){
   });
   if(at < text.length) dst.appendChild(document.createTextNode(text.slice(at)));
 }
-function noteWalk(src, dst, inLink, depth){
+function noteWalk(src, dst, inLink, depth, base){
   if(depth > 40) return;
   Array.prototype.forEach.call(src.childNodes, function(n){
     if(n.nodeType===3){ noteText(dst, n.nodeValue, inLink); return; }
@@ -453,25 +454,25 @@ function noteWalk(src, dst, inLink, depth){
     if(NOTE_DROP.test(tag)) return;
     var to = NOTE_TAG[tag];
     if(to==="a"){
-      var href = safeHref(n.getAttribute("href"));
-      if(!href || inLink){ noteWalk(n, dst, inLink, depth+1); return; }
-      var a = noteLink(href, []); noteWalk(n, a, true, depth+1); if(!a.textContent.trim()) a.textContent = href; dst.appendChild(a); return;
+      var href = safeHref(n.getAttribute("href"), base);
+      if(!href || inLink){ noteWalk(n, dst, inLink, depth+1, base); return; }
+      var a = noteLink(href, []); noteWalk(n, a, true, depth+1, base); if(!a.textContent.trim()) a.textContent = href; dst.appendChild(a); return;
     }
-    if(!to){ noteWalk(n, dst, inLink, depth+1); return; }
+    if(!to){ noteWalk(n, dst, inLink, depth+1, base); return; }
     var out = document.createElement(to); dst.appendChild(out);
-    if(to!=="br" && to!=="hr") noteWalk(n, out, inLink, depth+1);
+    if(to!=="br" && to!=="hr") noteWalk(n, out, inLink, depth+1, base);
   });
 }
-function notesBox(raw){
+function notesBox(note){
   var box = el("div",{class:"notes"});
-  raw = String(raw||"").trim();
+  var raw = String((note && note.h)||"").trim(), base = (note && note.b) || "";
   if(!/<[a-z!\/][^>]*>/i.test(raw)){
     // Plain text: keep its line breaks. Some feeds send their HTML escaped twice, so look again once.
     var d0 = new DOMParser().parseFromString("<div>"+raw.replace(/</g,"&lt;")+"</div>","text/html").body.textContent || "";
     if(/<[a-z\/][^>]*>/i.test(d0)) raw = d0;
     else { raw.split(/\r?\n/).forEach(function(line, i){ if(i) box.appendChild(el("br")); noteText(box, plainEnt(line), false); }); return box; }
   }
-  try{ var doc = new DOMParser().parseFromString(raw, "text/html"); noteWalk(doc.body, box, false, 0); }
+  try{ var doc = new DOMParser().parseFromString(raw, "text/html"); noteWalk(doc.body, box, false, 0, base); }
   catch(e){ box.textContent = plain(raw); }
   // Drop empty paragraphs the feed left behind.
   Array.prototype.slice.call(box.querySelectorAll("p,div,li,h4")).forEach(function(n){ if(!n.textContent.trim() && !n.querySelector("br,hr")) n.remove(); });
@@ -581,7 +582,7 @@ function fetchPIEps(show){
     if(!show.piId && items[0].feedId){ show.piId = items[0].feedId; }
     return items.filter(function(i){return i.enclosureUrl;}).map(function(i){
       var tr = (i.transcripts && i.transcripts.length) ? i.transcripts.map(function(t){return {url:t.url, type:t.type||""};}) : (i.transcriptUrl? [{url:i.transcriptUrl, type:""}] : []);
-      keepNotes(String(i.guid||i.enclosureUrl).trim(), i.description);
+      keepNotes(String(i.guid||i.enclosureUrl).trim(), i.description, i.link || show.feedUrl);
       return {g:String(i.guid||i.enclosureUrl).trim(), s:show.id, t:i.title||"Episode", d:i.datePublished? new Date(i.datePublished*1000).toISOString() : "",
         u:i.enclosureUrl, v:isVideo(i.enclosureType, i.enclosureUrl), ty:i.enclosureType||"", len:i.duration||0, x:plain(i.description||"").slice(0,1500),
         a:i.image||i.feedImage||"", ch:i.chaptersUrl||"", tr:tr};
@@ -610,10 +611,10 @@ function fetchRssEps(show){
     var x = new DOMParser().parseFromString(txt, "application/xml");
     var ch = x.querySelector("channel");
     if(ch && !show.art){ var img = ch.querySelector("image > url"); var it = ch.getElementsByTagNameNS("*","image")[0]; show.art = (it && it.getAttribute("href")) || (img && img.textContent) || ""; }
-    return rssItems(x, show.id);
+    return rssItems(x, show.id, show.feedUrl);
   });
 }
-function rssItems(x, sid){
+function rssItems(x, sid, base){
   return Array.prototype.slice.call(x.querySelectorAll("item")).map(function(item){
     var enc = item.querySelector("enclosure"); if(!enc) return null;
     var u = enc.getAttribute("url"); var g = item.querySelector("guid");
@@ -623,7 +624,8 @@ function rssItems(x, sid){
     var tr = Array.prototype.map.call(item.getElementsByTagNameNS("*","transcript"), function(t){ return {url:t.getAttribute("url"), type:t.getAttribute("type")||""}; }).filter(function(t){return t.url;});
     var chEl = item.getElementsByTagNameNS("*","chapters")[0];
     var full = item.getElementsByTagNameNS("*","encoded")[0];
-    keepNotes(String((g&&g.textContent.trim())||u).trim(), (full && full.textContent.trim()) || (desc && desc.textContent) || "");
+    var link = Array.prototype.filter.call(item.children, function(c){ return c.nodeName==="link"; })[0];
+    keepNotes(String((g&&g.textContent.trim())||u).trim(), (full && full.textContent.trim()) || (desc && desc.textContent) || "", (link && link.textContent.trim()) || base);
     return {g:String((g&&g.textContent.trim())||u).trim(), s:sid, t:title?title.textContent:"Episode", d:date?new Date(date.textContent).toISOString():"",
       u:u, v:isVideo(enc.getAttribute("type"), u), ty:enc.getAttribute("type")||"", len:dur, x:plain(desc?desc.textContent:"").slice(0,1500), a:"", ch: chEl? chEl.getAttribute("url")||"" : "", tr:tr};
   }).filter(Boolean);
