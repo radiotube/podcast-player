@@ -164,6 +164,8 @@ function srt(t){var cs=[];t.replace(/\r/g,"").split(/\n\n+/).forEach(function(b)
   var u=e.episodeUrl.replace(/^http:/,"https:");
   MK={u0:u,url:u,segs:[],buf:new Float32Array(0),bufT:0,skipTo:0,sl:[]};
   await mkHead(); log("head off="+MK.off+" sr="+MK.h.sr+" br="+MK.h.br);
+  var en=(location.search.match(/en=([\d.]+)-([\d.]+)/));
+  if(en){ await mkFill(); var a=+en[1],b=+en[2],row=[]; for(var t=a;t<b;t+=0.1){var i0=Math.round(t*MK_SR),i1=Math.round((t+0.1)*MK_SR),q=0;for(var i=i0;i<i1&&i<MK.buf.length;i++)q+=MK.buf[i]*MK.buf[i];var db=Math.round(10*Math.log10(q/(i1-i0)+1e-9));row.push(t.toFixed(1)+":"+db);} log("ENERGY "+row.join(" ")); }
   for(var i=0;i<wins;i++){ await step(); }
   log("SEGS:"); MK.segs.forEach(function(s){log(f2(s[0])+"-"+f2(s[1])+" "+s[2]);});
   var tu=(location.search.match(/srt=([^&]+)/)||[])[1];
