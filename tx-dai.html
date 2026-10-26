@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>tx dai</title><body><pre id="o">running</pre><script>
+var o=document.getElementById("o"),out=[];function log(s){out.push(s);o.textContent=out.join("\n");}
+function jsonp(u){return new Promise(function(res,rej){var n="cb"+Math.random().toString(36).slice(2);var s=document.createElement("script");var t=setTimeout(function(){rej(new Error("timeout"))},15000);window[n]=function(j){clearTimeout(t);res(j);s.remove();};s.onerror=function(){clearTimeout(t);rej(new Error("jsonp"))};s.src=u+"&callback="+n;document.body.appendChild(s);});}
+async function hash(b){var d=await crypto.subtle.digest("SHA-256",b);return Array.from(new Uint8Array(d)).slice(0,6).map(function(x){return x.toString(16).padStart(2,"0")}).join("");}
+async function get(u,a,b){var r=await fetch(u,{cache:"no-store",headers:{Range:"bytes="+a+"-"+b}});var ab=await r.arrayBuffer();return {st:r.status,cr:r.headers.get("content-range"),url:(r.url||"").replace(/\?.*$/,"?…"),h:await hash(ab),n:ab.byteLength};}
+(async function(){
+ var it=(location.search.match(/it=(\d+)/)||[])[1]||"1603639502";
+ var j=await jsonp("https://itunes.apple.com/lookup?id="+it+"&entity=podcastEpisode&limit=3");
+ var e=(j.results||[]).filter(function(x){return x.episodeUrl})[0]; log("ep: "+e.trackName+" ms="+e.trackTimeMillis);
+ var u=e.episodeUrl.replace(/^http:/,"https:");
+ for(var i=0;i<4;i++){
+   try{var x=await get(u,0,65535),y=await get(u,2000000,2065535);log("try "+i+": "+x.st+" "+x.cr+" head="+x.h+" at2MB="+y.h+" "+y.cr+" url="+x.url);}catch(err){log("try "+i+" FAIL "+err);}
+ }
+ log("DONE");
+})();
+</script>
