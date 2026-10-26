@@ -2500,7 +2500,7 @@ function txTick(now){
    cut at whole MP3 frames, so the times come from counting frames and stay exact. A finished transcript is
    kept on the device and put in Dropbox (transcripts/<id>.json, added once, never written over), so each
    episode is made once and shows on every device signed in to the same Dropbox. */
-var MK = null, MK_WIN = 30, MK_SR = 16000, MK_SLICE = 393216, MK_MODEL_MB = 41;
+var MK = null, MK_MAX = 250*1048576, MK_WIN = 30, MK_SR = 16000, MK_SLICE = 393216, MK_MODEL_MB = 41;
 var mkRows = [], mkMade = {}, mkMiss = {}, mkW = null, mkCb = {}, mkId = 0, mkLock = null;
 var MK_MSG = {
   blocked:"This show's server won't let the app read its audio, so the app can't make a transcript for it.",
@@ -2508,6 +2508,7 @@ var MK_MSG = {
   video:"The transcript maker works on audio episodes, not video.",
   net:"The connection dropped. Tap Continue to pick up where it stopped.",
   model:"Couldn't load the speech model.",
+  big:"This show's server only sends the whole file at once, and this episode is too big to read that way.",
   decode:"This device couldn't read the sound in this episode's file.",
   failed:"Something went wrong while making the transcript."
 };
@@ -2607,12 +2608,19 @@ function mkBytes(start, len){
   if(J.mem) return Promise.resolve(J.mem.subarray(start, Math.min(J.mem.length, start+len)));
   var ctl = new AbortController(); J.ctl = ctl;
   var to = setTimeout(function(){ ctl.abort(); }, 60000);
-  var get = function(url){ return fetch(url, {mode:"cors", headers:{Range:"bytes="+start+"-"+(start+len-1)}, signal:ctl.signal}); };
-  return get(J.url).catch(function(e){ if(J.url!==J.u0 && !J.dead) { J.url = J.u0; return get(J.url); } throw e; }).then(function(r){
+  var get = function(url, plain){ return fetch(url, plain ? {mode:"cors", signal:ctl.signal} : {mode:"cors", headers:{Range:"bytes="+start+"-"+(start+len-1)}, signal:ctl.signal}); };
+  // Some hosts turn down a request for part of the file but allow a plain one for the whole file.
+  return get(J.url).catch(function(e){
+    if(J.dead) throw e;
+    if(J.url!==J.u0){ J.url = J.u0; return get(J.url); }
+    if(!J.got && !J.plain){ J.plain = true; return get(J.url, true); }
+    throw e;
+  }).then(function(r){
     if(r.status===416){ clearTimeout(to); return new Uint8Array(0); }
     if(r.status!==206 && r.status!==200){ clearTimeout(to); var e = new Error("http "+r.status); e.http = r.status; throw e; }
     if(r.url) J.url = r.url;
     var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||""); if(m) J.size = +m[1];
+    if(r.status===200 && +(r.headers.get("content-length")||0) > MK_MAX){ ctl.abort(); clearTimeout(to); throw new Error("big"); }
     return r.arrayBuffer().then(function(ab){
       clearTimeout(to); J.got = true;
       if(r.status===200){ J.mem = new Uint8Array(ab); J.size = J.mem.length; return J.mem.subarray(start, Math.min(J.mem.length, start+len)); }
@@ -2721,7 +2729,7 @@ function mkStep(){
     else if(msg==="stopped") return;
     else if(e && e.model){ J.st = "model"; J.err = msg.replace(/^model:\s*/,""); }
     else if(e && e.run){ J.st = "failed"; J.err = msg; }
-    else if(msg==="decode") J.st = "decode";
+    else if(msg==="decode" || msg==="big") J.st = msg;
     else if(!J.got && !J.resumed) J.st = "blocked";
     else { J.st = "net"; J.retry = (J.retry||0) + 1; if(J.retry <= 3 && !document.hidden){ setTimeout(function(){ if(MK===J && !J.dead && J.st==="net") { J.st = "run"; mkStep(); } }, 4000); } }
     if(J.st!=="net" && J.st!=="run"){ J.dead = true; mkEnd(); }
@@ -2761,7 +2769,8 @@ function mkStart(e, sh){
     return mkHead();
   }).then(function(){ if(!J.dead){ J.st = J.st==="start" ? "model" : J.st; mkUI(); mkStep(); } }).catch(function(err){
     if(J.dead) return;
-    J.st = String(err && err.message)==="format" ? "format" : (J.got ? "failed" : "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
+    var em = String(err && err.message);
+    J.st = em==="format" || em==="big" ? em : (J.got ? "failed" : "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
   });
 }
 function mkStop(){
