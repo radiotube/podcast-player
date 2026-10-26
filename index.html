@@ -2857,7 +2857,7 @@ function mkStep(){
     else if(msg==="decode" || msg==="big") J.st = msg;
     else if(!J.got && !J.resumed){ J.st = "blocked"; if(e && e.name==="TypeError") txNote(J.sid, "blocked"); }
     else { J.st = "net"; J.retry = (J.retry||0) + 1; if(J.retry <= 3 && !document.hidden){ setTimeout(function(){ if(MK===J && !J.dead && J.st==="net") { J.st = "run"; mkStep(); } }, 4000); } }
-    if(J.st!=="net" && J.st!=="run"){ J.dead = true; mkEnd(); }
+    if(J.st!=="net" && J.st!=="run"){ J.dead = true; mkEnd(); if(J.auto) mkAutoSoon(1500); }
     mkUI();
   }).then(function(){ if(J.busy && J.dead) J.busy = false; });
 }
@@ -2875,6 +2875,8 @@ function mkFinish(){
   J.dead = true; J.busy = false; mkEnd(); mkWake(false);
   var o = {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, made:new Date().toISOString(), by:"whisper-tiny.en", dur:Math.round(J.bufT), segs:J.segs, src:J.url, size:J.size||0, up:false};
   J.st = "done"; J.made = o; mkMade[J.key] = o; delete mkMiss[J.key];
+  // The host let the app read this one, so the show is no longer marked as turning it away.
+  if(txBlocked(J.sid)) txNote(J.sid, "ok");
   if(cur && cur.g===J.g && txKind==="made") txMade = o;
   mkUseSrc(J.g, J.url);
   mkPutLocal("tx", J.key, o).then(function(){ return mkDelLocal("txp", J.key); }).then(function(){
@@ -2906,6 +2908,8 @@ function mkStart(e, sh, again, auto){
     var em = String(err && err.message);
     if(em==="changed") mkDelLocal("txp", J.key);
     J.st = em==="format" || em==="big" || em==="changed" ? em : (J.got ? "failed" : "blocked"); if(J.st==="blocked" && err && err.name==="TypeError") txNote(J.sid, "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
+    // One it couldn't read on its own is set aside, and the next one starts right away.
+    if(J.auto) mkAutoSoon(1500);
   });
 }
 function mkStop(){
@@ -3030,7 +3034,6 @@ function mkAutoScan(){
   var shows = mkAutoShows(), found = [], per = epCap() || 5;
   return shows.reduce(function(p, sh){
     return p.then(function(){
-      if(txBlocked(sh.id)) return;
       return episodesFor(sh).then(function(eps){
         byDate(capEps(eps), false).slice(0, per).forEach(function(e){ if(mkAutoWanted(e)) found.push({e:e, sh:sh, t:new Date(e.d).getTime()||0}); });
       }, function(){});
@@ -3066,7 +3069,7 @@ function mkAutoNext(){
 function mkAutoPick(){
   var x = MKA.q.shift();
   if(!x){ mkAutoShow(); return; }
-  if(!mkAutoWanted(x.e) || txBlocked(x.sh.id) || mkMade[x.key]) return mkAutoPick();
+  if(!mkAutoWanted(x.e) || mkMade[x.key]) return mkAutoPick();
   MKA.picking = true;
   mkFind(x.sh.id, x.e.g).then(function(o){
     MKA.picking = false;
@@ -3128,7 +3131,7 @@ function mkAutoCard(){
   var box = el("div",{class:"mk-auto"},[
     el("h3",{text:"Make them ahead"}),
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkAutoSel"},[ "Make transcripts ahead for", sel ]) ]),
-    el("p",{text:"While the app is open on screen, it lines up new episodes of these shows that you haven't played and that have no transcript yet, and makes them one at a time, newest first. Each one goes to your Dropbox, so it's ready on your other devices when you listen. It looks for new episodes every half hour, and takes at most the newest "+(epCap()||5)+" of each show (your Past episodes per show setting). Shows whose host won't let the app read the audio are left out."}),
+    el("p",{text:"While the app is open on screen, it lines up new episodes of these shows that you haven't played and that have no transcript yet, and makes them one at a time, newest first. Each one goes to your Dropbox, so it's ready on your other devices when you listen. It looks for new episodes every half hour, and takes at most the newest "+(epCap()||5)+" of each show (your Past episodes per show setting). Shows whose host won't let the app read the audio get one quick try at each new episode. If a try works, the show is no longer marked as turning the app away."}),
     el("p",{text:"Best on a computer that's plugged in: leave the app open in its own browser window, as the front tab, and not minimized. It waits whenever the app is off screen. This choice is kept on this device only."}),
     st, row
   ]);
