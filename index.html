@@ -237,6 +237,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 /* Episode tabs, sort and listened marks */
 .ep-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .seg{display:flex;flex:1 1 220px;background:var(--surface);border-radius:12px;padding:3px;gap:3px}
+.view > .seg{flex:none}
 .seg button{flex:1;border:0;background:none;border-radius:9px;padding:8px 10px;min-height:40px;font-size:15px;font-weight:600;color:var(--muted);white-space:nowrap}
 .seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--fg)}
 .ep-info{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px}
@@ -432,7 +433,9 @@ function keepNotes(g, html, base){ if(g && html) NOTES[g] = {h:String(html).slic
 var NOTE_DROP = /^(script|style|iframe|frame|frameset|object|embed|applet|svg|math|template|noscript|form|input|button|select|option|textarea|head|title|meta|link|base|video|audio|source|track|canvas|picture|img|map|area)$/;
 var NOTE_TAG = {p:"p", br:"br", a:"a", b:"strong", strong:"strong", i:"em", em:"em", u:"u", ul:"ul", ol:"ol", li:"li", blockquote:"blockquote",
   h1:"h4", h2:"h4", h3:"h4", h4:"h4", h5:"h4", h6:"h4", pre:"p", hr:"hr", div:"div", tr:"div", section:"div", article:"div", dt:"div", dd:"div", code:"code"};
-var URL_RE = /\bhttps?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]}]/gi;
+// A second address glued onto the first (feeds that lose their line breaks) starts a new link.
+var URL_RE = /\bhttps?:\/\/(?:(?!https?:\/\/)[^\s<>"'])*(?:(?!https?:\/\/)[^\s<>"'.,;:!?)\]}])/gi;
+function shortUrl(u){ var t = u.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, ""); return t.length > 42 ? t.slice(0, 40)+"…" : t; }
 // Links the show wrote relative to its own site are completed from the episode's page or the feed.
 function safeHref(h, base){ h = String(h||"").trim(); if(!h || h.charAt(0)==="#") return ""; try{ h = new URL(h, base || undefined).href; }catch(e){} return /^(https?:\/\/|mailto:)/i.test(h) ? h : ""; }
 function noteLink(href, kids){ var a = el("a",{href:href, target:"_blank", rel:"noopener noreferrer"}); kids.forEach(function(k){ a.appendChild(k); }); return a; }
@@ -441,7 +444,8 @@ function noteText(dst, text, inLink){
   if(inLink){ dst.appendChild(document.createTextNode(text)); return; }
   var at = 0; text.replace(URL_RE, function(m, i){
     if(i > at) dst.appendChild(document.createTextNode(text.slice(at, i)));
-    dst.appendChild(noteLink(m, [document.createTextNode(m)])); at = i + m.length; return m;
+    else if(i && i===at) dst.appendChild(document.createTextNode(" "));
+    dst.appendChild(noteLink(m, [document.createTextNode(shortUrl(m))])); at = i + m.length; return m;
   });
   if(at < text.length) dst.appendChild(document.createTextNode(text.slice(at)));
 }

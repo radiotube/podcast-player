@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>seed</title><body style="margin:0;background:#333">
+<script>
+var S = JSON.parse(localStorage.getItem("pp.v1")||"{}"); S.subs = S.subs||{};
+var feed = new URL("feed.xml", location.href).href;
+S.subs["rss:notes-test"] = {id:"rss:notes-test", title:"Notes Test Show", author:"Test", feedUrl:feed, art:"", cats:["Ham Radio"], fT:Date.now()};
+if(S.cache) delete S.cache["rss:notes-test"];
+localStorage.setItem("pp.v1", JSON.stringify(S));
+document.write('<iframe src="../index.html" style="width:390px;height:844px;border:0;display:block;margin:10px"></iframe>');
+</script></body>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+<channel><title>Notes Test Show</title><link>https://example.org/</link><description>Test</description>
+<item><title>Test episode with rich notes</title><link>https://example.org/episodes/1</link><guid>notes-test-1</guid><pubDate>Sat, 24 Oct 2026 14:00:00 +0000</pubDate>
+<itunes:duration>45:30</itunes:duration>
+<enclosure url="https://www.arnewsline.org/s/Report2556.mp3" type="audio/mpeg" length="1"/>
+<podcast:chapters url="https://raw.githack.com/radiotube/podcast-player/details-test/t/chapters.json" type="application/json+chapters"/>
+<podcast:transcript url="https://example.org/t.vtt" type="text/vtt"/>
+<description>Short summary of the episode for the list.</description>
+<content:encoded><![CDATA[<h2>In this episode</h2><p>We talk about <b>antennas</b> and <i>baluns</i>. <a href="/show-notes/1">Full notes</a> and <a href="https://example.com/x" onclick="alert(1)">sponsor</a>.</p><ul><li>First topic</li><li>Second topic, see https://example.net/page</li></ul><script>alert('x')</script><img src="https://example.org/pic.jpg" onerror="alert(1)"><iframe src="https://example.org"></iframe><p><a href="javascript:alert(2)">bad link</a></p><blockquote>A quote</blockquote>]]></content:encoded>
+</item>
+<item><title>Test episode with no notes</title><guid>notes-test-2</guid><pubDate>Fri, 23 Oct 2026 14:00:00 +0000</pubDate>
+<enclosure url="https://www.arnewsline.org/s/Report2555.mp3" type="audio/mpeg" length="1"/>
+</item>
+</channel></rss>
