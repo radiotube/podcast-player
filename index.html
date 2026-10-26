@@ -2619,6 +2619,16 @@ function pick3(b, l, r, preferLocal){
   var lc = !same(l, b), rc = !same(r, b);
   return !lc ? r : !rc ? l : (preferLocal ? l : r);
 }
+function mergeWordList(b, l, r){
+  if(!Array.isArray(l) && !Array.isArray(r)) return null;
+  var B = Array.isArray(b) ? b : [], Lw = Array.isArray(l) ? l : B, Rw = Array.isArray(r) ? r : B;
+  var has = function(list, k){ return list.some(function(w){ return wordKey(w)===k; }); };
+  var gone = {};
+  B.forEach(function(w){ var k = wordKey(w); if(!has(Lw, k) || !has(Rw, k)) gone[k] = 1; });
+  var seen = {}, out = [];
+  Lw.concat(Rw).forEach(function(w){ var k = wordKey(w); if(!k || gone[k] || seen[k]) return; seen[k] = 1; out.push(w); });
+  return out;
+}
 function mergeFields(b, l, r, preferLocal){
   var out = {}, keys = {};
   [b||{}, l, r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = 1; }); });
@@ -2672,7 +2682,18 @@ function mergeSync(base, local, remote, fresh){
   [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords","wordAt","catOrder"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  // A setting newer than this device's last-seen copy, still at its starting value here, hasn't been
+  // changed here, so Dropbox's value stands. Without this, an update wiped settings made on another device.
+  var DEF = blank();
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","catOrder"].forEach(function(k){
+    var b = B.prefs[k], l = L.prefs[k], r = R.prefs[k];
+    if(b===undefined && r!==undefined && (l===undefined || same(l, DEF[k]))) l = r;
+    var v = pick3(b, l, r, preferLocal); if(v!==undefined) out.prefs[k] = v;
+  });
+  // Skip and highlight words: added on either device stay; removed on either device go.
+  ["skipWords","hiWords"].forEach(function(k){ var v = mergeWordList(B.prefs[k], L.prefs[k], R.prefs[k]); if(v) out.prefs[k] = v; });
+  var at = {}; [B.prefs.wordAt, L.prefs.wordAt, R.prefs.wordAt].forEach(function(o){ if(o && typeof o==="object") Object.keys(o).forEach(function(w){ if(+o[w] > (at[w]||0)) at[w] = +o[w]; }); });
+  if(Object.keys(at).length || L.prefs.wordAt || R.prefs.wordAt) out.prefs.wordAt = at;
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
