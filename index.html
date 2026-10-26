@@ -375,9 +375,15 @@ var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?
 function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[]};}
 var S = load();
 function load(){
-  var s = null;
-  try{ s = JSON.parse(localStorage.getItem(KEY)||"null"); }catch(e){ s = null; }
-  if(!s || typeof s !== "object") s = blank();
+  var s = null, raw = null;
+  try{ raw = localStorage.getItem(KEY); }catch(e){}
+  try{ s = JSON.parse(raw||"null"); }catch(e){ s = null; }
+  if(!s || typeof s !== "object"){
+    s = blank();
+    // This device's saved copy is gone or unreadable. Forget the Dropbox copy it last saw too, so the next
+    // sync takes on Dropbox's copy instead of reading every show missing here as one removed here.
+    try{ localStorage.removeItem("pp.dbx.base"); }catch(e){}
+  }
   var b = blank(); for(var k in b){ if(!(k in s)) s[k] = b[k]; }
   if(!s.seeded){ s.subs[NEWSLINE.id] = NEWSLINE; if(s.fav.indexOf(NEWSLINE.id)<0) s.fav.unshift(NEWSLINE.id); s.seeded = true; }
   s.fav = s.fav.filter(function(id){return s.subs[id];});
@@ -3151,18 +3157,28 @@ function mergeSync(base, local, remote, fresh){
   if(fresh){ L.subs = {}; L.fav = []; }
   var out = {subs:{}, pos:{}, posT:{}, played:{}, hideSugg:{}, unf:{}, keep:{}, prefs:{}};
 
-  // Shows: added on either side stay; removed on either side go, unless the other side added it fresh.
+  // Unfollow notes and Keep choices: the newest time for each show wins. A show stays unfollowed
+  // unless it was followed again after the note.
+  ["unf","keep"].forEach(function(k){ [L[k], R[k]].forEach(function(o){ Object.keys(o).forEach(function(id){ var t = +o[id]||0; if(t > (out[k][id]||0)) out[k][id] = t; }); }); });
+  var unfollowed = function(id, sh){ return !!out.unf[id] && out.unf[id] > (+(sh && sh.fT)||0); };
+  // A show only ever leaves through Unfollow, which leaves a dated note. A side that's missing shows with
+  // no note has lost its copy (an emptied device, say), so its missing shows, favorites order and settings
+  // don't count as changes. Without this, one emptied device wiped every show on every device.
+  var lostSide = function(S2){ return Object.keys(B.subs).some(function(id){ return !S2.subs[id] && !unfollowed(id, B.subs[id]); }); };
+  [L, R].forEach(function(S2){
+    if(!base || !lostSide(S2)) return;
+    S2.fav = B.fav.slice(); var at = S2.prefs.wordAt; S2.prefs = copy(B.prefs); if(at) S2.prefs.wordAt = at;
+  });
+
+  // Shows: added on either side stay. One missing on a side stays too, unless it was unfollowed.
   var ids = {}; [B.subs, L.subs, R.subs].forEach(function(o){ Object.keys(o).forEach(function(id){ ids[id] = 1; }); });
   Object.keys(ids).forEach(function(id){
     var b = B.subs[id], l = L.subs[id], r = R.subs[id];
     if(!b){ out.subs[id] = (l && r) ? mergeFields(null, l, r, preferLocal) : copy(l||r); return; }
-    if(!l || !r) return;
-    out.subs[id] = mergeFields(b, l, r, preferLocal);
+    if((!l || !r) && unfollowed(id, b)) return;
+    out.subs[id] = mergeFields(b, l||b, r||b, preferLocal);
   });
-  // Unfollow notes and Keep choices: the newest time for each show wins. A show stays unfollowed
-  // unless it was followed again after the note.
-  ["unf","keep"].forEach(function(k){ [L[k], R[k]].forEach(function(o){ Object.keys(o).forEach(function(id){ var t = +o[id]||0; if(t > (out[k][id]||0)) out[k][id] = t; }); }); });
-  Object.keys(out.unf).forEach(function(id){ var sh = out.subs[id]; if(sh && out.unf[id] > (+sh.fT||0)) delete out.subs[id]; });
+  Object.keys(out.unf).forEach(function(id){ if(out.subs[id] && unfollowed(id, out.subs[id])) delete out.subs[id]; });
 
   // Favorites order.
   var lc = !same(L.fav, B.fav), rc = !same(R.fav, B.fav);
@@ -3250,6 +3266,9 @@ function runSync(tries, keepalive){
     var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
     var local = copy(snap());
     var merged = rd ? mergeSync(base, local, rd, !base && isFresh()) : local;
+    // Last guard: never send Dropbox a copy missing shows it has, unless they were unfollowed.
+    var lost = rd ? Object.keys(rd.subs||{}).filter(function(id){ return !merged.subs[id] && !(merged.unf && merged.unf[id]); }) : [];
+    if(lost.length){ var ge = new Error("Sync stopped so it wouldn't remove "+lost.length+" show"+(lost.length===1?"":"s")+" from Dropbox. Nothing was changed. Earlier copies, below, can put a good copy back."); ge.guard = true; throw ge; }
     applyMerged(merged);
     var out = copy(snap());
     if(rd && same(out, pickSnap(rd))){ lsSet(DBX_BASE, {data:out}); return; }
@@ -3273,7 +3292,8 @@ function syncNow(keepalive){
     if(!dbx) return;
     if(e && e.message==="signedout") return;
     var said = errText(e), when = new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
-    if(/missing_scope|required scope/i.test(said)) setSync("Couldn't save to Dropbox at "+when+": the Dropbox app doesn't have permission to read and write its files. On the app's Permissions tab in the Dropbox App Console, tick files.content.read and files.content.write and click Submit. Then sign out here and sign in again. Dropbox said: "+said, true);
+    if(e && e.guard) setSync(e.message, true);
+    else if(/missing_scope|required scope/i.test(said)) setSync("Couldn't save to Dropbox at "+when+": the Dropbox app doesn't have permission to read and write its files. On the app's Permissions tab in the Dropbox App Console, tick files.content.read and files.content.write and click Submit. Then sign out here and sign in again. Dropbox said: "+said, true);
     else setSync("Couldn't save to Dropbox at "+when+". Dropbox said: "+said+". Will try again.", true);
     if(!sync.warned){ sync.warned = true; toast("Dropbox sync isn't working. Settings shows why."); }
   }).then(function(){ sync.busy = null; holdEnd(); if(sync.again){ sync.again = false; syncSoon(800); } });
@@ -3314,6 +3334,98 @@ function dbxReturn(){
     setSync("Dropbox sign-in didn't finish. Dropbox said: "+errText(e)+". Try again.", true); if(route.tab==="settings") render();
   });
 }
+/* Earlier copies on Dropbox. Dropbox keeps each saved version of sync.json (for 30 days on most plans), so a
+   copy from before something went wrong can come back. Putting one back adds its shows, subjects, favorites
+   order and settings to what's there now; listening spots and played marks keep whichever is newer. */
+var hist = {open:false, list:null, err:"", shown:15, armed:""};
+function dbxRevs(){ return dbxApi("files/list_revisions", {path:DBX_FILE, mode:"path", limit:100}).then(function(j){ return j.entries||[]; }); }
+function dbxGetRev(rev){
+  return dbxCall("https://content.dropboxapi.com/2/files/download", {"Dropbox-API-Arg":JSON.stringify({path:"rev:"+rev})}).then(function(r){
+    if(!r.ok) return dbxJson(r).then(function(j){ throw new Error(dbxErr(j, r.status)); });
+    return r.text().then(function(t){ var d = JSON.parse(t); if(!d || d.app!=="podcast-player") throw new Error("not a sync copy"); return d; });
+  });
+}
+function copySummary(d){
+  var subs = d.subs||{}, ids = Object.keys(subs).filter(function(id){ var u = (d.unf||{})[id]; return !(u && u > (+subs[id].fT||0)); });
+  var cats = {}; ids.forEach(function(id){ normCats(subs[id]); catsOf(subs[id]).forEach(function(c){ cats[c] = 1; }); });
+  var p = d.prefs||{}, words = (p.skipWords||[]).length + (p.hiWords||[]).length;
+  return {shows:ids.length, cats:Object.keys(cats).length, words:words};
+}
+function histLoad(){
+  hist.err = ""; hist.list = null; histDraw();
+  dbxRevs().then(function(list){
+    hist.list = list.map(function(e){ return {rev:e.rev, at:e.server_modified, size:e.size}; });
+    histDraw(); histFill();
+  }, function(e){
+    var said = errText(e);
+    hist.err = /scope/i.test(said) ? "Dropbox won't let the app list earlier copies yet ("+said+"). You can still get one back on dropbox.com: open Apps, then N5PREcaster, click the three dots next to sync.json, choose Activity or Version history, and restore the copy from before the problem." : "Couldn't get the list from Dropbox. Dropbox said: "+said;
+    histDraw();
+  });
+}
+function histFill(){
+  if(!hist.list) return;
+  var next = hist.list.slice(0, hist.shown).filter(function(e){ return !e.sum && !e.busy && !e.bad; })[0];
+  if(!next) return;
+  next.busy = true;
+  dbxGetRev(next.rev).then(function(d){ next.sum = copySummary(d); }, function(){ next.bad = true; }).then(function(){ next.busy = false; histDraw(); histFill(); });
+}
+function histUse(e){
+  setSync("Putting back the copy from "+histWhen(e.at)+"…");
+  return dbxGetRev(e.rev).then(function(old){
+    var tries = 0;
+    var go = function(){
+      return dbxDownload().then(function(remote){
+        var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
+        var baseRec = lsGet(DBX_BASE), now = rd ? mergeSync(baseRec && baseRec.data, copy(snap()), rd, false) : copy(snap());
+        // The old copy goes in as Dropbox's side of a first sync: its shows join what's here, and its order and settings win.
+        var m = mergeSync(null, now, pickSnap(old), false);
+        applyMerged(m);
+        var out = copy(snap()), file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
+        return dbxUpload(file, remote && remote.rev).then(function(){ lsSet(DBX_BASE, {data:out}); }, function(err){
+          if(err.conflict && ++tries < 3) return go();
+          throw err;
+        });
+      });
+    };
+    return go();
+  }).then(function(){
+    sync.at = Date.now(); sync.sent = stable(snap()); sync.syncedKey = keyState(); setSync("Put back the copy from "+histWhen(e.at)+". "+syncedLabel());
+    toast("Your shows, subjects and settings are back"); hist.open = false; render();
+  }, function(err){ setSync("Couldn't put that copy back. "+errText(err), true); });
+}
+function histWhen(at){ var d = new Date(at); return (d.toDateString()===new Date().toDateString() ? "today" : fmtDate(d.toISOString()))+" at "+d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}); }
+function histDraw(){ var b = $("histBox"); if(b) b.replaceWith(histBox()); }
+function histBox(){
+  var box = el("div",{id:"histBox", style:"display:flex;flex-direction:column;gap:10px;margin-top:12px"});
+  if(!hist.open){
+    box.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Earlier copies on Dropbox", onclick:function(){ hist.open = true; hist.shown = 15; histLoad(); }}) ]));
+    return box;
+  }
+  box.appendChild(el("h3",{text:"Earlier copies on Dropbox"}));
+  box.appendChild(el("p",{class:"note", text:"Each time this app syncs, Dropbox keeps the copy it replaced. Putting one back adds its shows, subjects, favorites order and settings to what you have now. Listening spots and played marks keep whichever is newer."}));
+  if(hist.err){ box.appendChild(el("p",{class:"status err", text:hist.err})); }
+  else if(!hist.list){ box.appendChild(el("p",{class:"note", text:"Getting the list from Dropbox…"})); }
+  else {
+    var most = 0; hist.list.forEach(function(e){ if(e.sum && e.sum.shows > most) most = e.sum.shows; });
+    var best = hist.list.filter(function(e){ return e.sum && e.sum.shows===most; })[0];
+    var ul = el("ul",{class:"show-list"});
+    hist.list.slice(0, hist.shown).forEach(function(e, i){
+      var what = e.sum ? e.sum.shows+" show"+(e.sum.shows===1?"":"s")+", "+e.sum.cats+" subject"+(e.sum.cats===1?"":"s")+", "+e.sum.words+" skip or highlight word"+(e.sum.words===1?"":"s") : e.bad ? "Couldn't read this copy" : "Reading…";
+      var tag = i===0 ? " (what Dropbox has now)" : (e===best && most ? " (most shows)" : "");
+      var btn = i===0 || !e.sum ? null : el("button",{class:"btn secondary", text: hist.armed===e.rev ? "Tap again to put back" : "Put back", onclick:function(){
+        if(hist.armed!==e.rev){ hist.armed = e.rev; histDraw(); setTimeout(function(){ if(hist.armed===e.rev){ hist.armed = ""; histDraw(); } }, 8000); return; }
+        hist.armed = ""; this.disabled = true; this.textContent = "Putting back…"; histUse(e);
+      }});
+      ul.appendChild(el("li",{class:"show-row", style:"grid-template-columns:minmax(0,1fr) auto"},[
+        el("div",{},[ el("div",{style:"font-weight:600", text:histWhen(e.at)+tag}), el("div",{class:"note", text:what}) ]), btn
+      ]));
+    });
+    box.appendChild(ul);
+    if(hist.list.length > hist.shown) box.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Show older copies", onclick:function(){ hist.shown += 15; histDraw(); histFill(); }}) ]));
+  }
+  box.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Close", onclick:function(){ hist.open = false; histDraw(); }}) ]));
+  return box;
+}
 function syncCard(){
   var card = el("div",{class:"card", id:"syncCard"},[ el("h3",{text:"Sync with Dropbox"}) ]);
   var status = el("p",{class:"status"+(sync.err?" err":""), id:"syncStatus", "aria-live":"polite", text:sync.msg});
@@ -3329,6 +3441,7 @@ function syncCard(){
       el("button",{class:"btn secondary", text:"Sync now", onclick:function(){ syncNow(); }}),
       el("button",{class:"btn secondary", text:"Sign out of Dropbox", onclick:function(){ dbxSignOut(); toast("Signed out of Dropbox. Your shows stay on this device."); render(); }})
     ]));
+    card.appendChild(histBox());
     return card;
   }
   card.appendChild(el("p",{text:"Sign in with your own Dropbox to keep your shows, subjects, favorites order and listening spots the same on your iPhone, iPad and computer. The app can only see its own folder in your Dropbox, Apps, then the app's name. Do this once on each device, inside the app you added to your Home Screen."}));
