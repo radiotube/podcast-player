@@ -196,6 +196,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .sugg-acts .pill-btn{padding:8px 12px}
 .icon-btn.plain{background:none;color:var(--muted);width:36px}
 .show-row .a .new{color:var(--good)}
+.show-row .a .also{color:var(--muted)}
 .group-label{font-size:15px;font-weight:650;margin:14px 0 2px;color:var(--fg)}
 .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
 .field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600;min-width:0}
@@ -828,11 +829,11 @@ function renderHome(top, view){
   } else if(filterCat || !subs.length){
     var ol = el("ul",{class:"show-list"}); others.forEach(function(sh){ ol.appendChild(showRow(sh, !!filterCat)); }); oSec.appendChild(ol);
   } else {
-    // A show under two subjects appears in both groups.
+    // Each show is listed once, under the first subject it was given; its other subjects show on its row.
     subs.concat([""]).forEach(function(c){
-      var group = others.filter(function(sh){ return c ? catsOf(sh).indexOf(c)>=0 : !catsOf(sh).length; }); if(!group.length) return;
+      var group = others.filter(function(sh){ return (catsOf(sh)[0]||"")===c; }); if(!group.length) return;
       oSec.appendChild(el("h3",{class:"group-label", text:c||"No subject"}));
-      var gl = el("ul",{class:"show-list"}); group.forEach(function(sh){ gl.appendChild(showRow(sh)); }); oSec.appendChild(gl);
+      var gl = el("ul",{class:"show-list"}); group.forEach(function(sh){ gl.appendChild(showRow(sh, false, false, catsOf(sh).slice(1))); }); oSec.appendChild(gl);
     });
   }
   view.appendChild(oSec);
@@ -973,13 +974,14 @@ function enableDrag(list){
     });
   });
 }
-function showRow(sh, withCount, viaApple){
+function showRow(sh, withCount, viaApple, alsoIn){
   var subbed = !!S.subs[sh.id];
   var a = el("div",{class:"a"});
   var u = withCount ? unheard(sh) : null;
   if(subbed && isQuiet(sh)){ a.appendChild(el("span",{class:"badge quiet", text:"Quiet 1+ year"})); a.appendChild(document.createTextNode(" ")); }
   if(u && u.length) a.appendChild(el("span",{class:"new", text:u.length+" new to me · "}));
   if(viaApple) a.appendChild(el("span",{class:"via", text:"via Apple · "}));
+  if(alsoIn && alsoIn.length) a.appendChild(el("span",{class:"also", text:"Also in "+alsoIn.join(", ")+" · "}));
   a.appendChild(document.createTextNode((sh.author||"")+(sh.medium==="video"?" · Video":"")));
   return el("li",{class:"show-row"},[
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
@@ -1006,6 +1008,36 @@ function adopt(sh){
   if(sh.sugCat && catsOf(sh).indexOf(sh.sugCat)<0) sh.cats = catsOf(sh).concat([sh.sugCat]);
   delete sh.sugCat; delete sh.genre; delete sh.last; delete sh.n;
   sh.fT = Date.now(); S.subs[sh.id] = sh; return sh;
+}
+/* The followed copy of a show, found by its id, Apple id, Podcast Index id or feed address.
+   Podcast Index and Apple can list one show under different ids, so a search result
+   for a show already followed leads to the followed copy instead of a second one. */
+function showKeys(sh){ return [sh.id, sh.itunesId && "it:"+sh.itunesId, sh.piId && "pi:"+sh.piId, sh.feedUrl && "u:"+normUrl(sh.feedUrl)].filter(Boolean); }
+function followedAs(sh){
+  if(!sh) return null; if(S.subs[sh.id]) return S.subs[sh.id];
+  var ks = showKeys(sh), hit = null;
+  Object.keys(S.subs).some(function(id){ var o = S.subs[id]; if(showKeys(o).some(function(k){ return ks.indexOf(k)>=0; })){ hit = o; return true; } return false; });
+  return hit;
+}
+/* A show followed twice under different ids: the extra copy goes when it has no star and no
+   subjects, through the usual dated Unfollow note so other devices drop it too. Copies that
+   each carry a star or subjects are both left alone. Played marks and spots are kept per
+   episode, so nothing is lost. Runs on the copy just merged with Dropbox. */
+function foldDupes(){
+  var ids = Object.keys(S.subs), seen = {}, dropped = [];
+  var weight = function(id){ var sh = S.subs[id]; return [S.fav.indexOf(id)>=0 ? 0 : 1, -catsOf(sh).length, /^it:/.test(id) ? 0 : 1, sh.fT||0, id]; };
+  var before = function(a, b){ var x = weight(a), y = weight(b); for(var i=0;i<x.length;i++){ if(x[i]<y[i]) return true; if(x[i]>y[i]) return false; } return false; };
+  ids.forEach(function(id){ showKeys(S.subs[id]).forEach(function(k){ (seen[k] = seen[k]||[]).push(id); }); });
+  Object.keys(seen).forEach(function(k){
+    var group = seen[k].filter(function(id, i, a){ return S.subs[id] && a.indexOf(id)===i; }); if(group.length<2) return;
+    var keep = group.reduce(function(a, b){ return before(b, a) ? b : a; });
+    group.forEach(function(id){
+      if(id===keep || S.fav.indexOf(id)>=0 || catsOf(S.subs[id]).length) return;
+      if(S.now && S.now.s===id) S.now.s = keep;
+      dropShow(S.subs[id]); dropped.push(id);
+    });
+  });
+  return dropped;
 }
 
 /* ---------- Show page ---------- */
@@ -1620,7 +1652,7 @@ function drawResults(out){
   if(!out) return; out.innerHTML = "";
   var ls = lastSearch, piRs = ls.pi||[], apple = ls.apple;
   if(ls.piErr) out.appendChild(el("p",{class:"status err", text:ls.piErr}));
-  var list = function(rs, via){ var ul = el("ul",{class:"show-list"}); rs.forEach(function(sh){ ul.appendChild(showRow(S.subs[sh.id]||sh, false, via && via(sh))); }); return ul; };
+  var list = function(rs, via){ var ul = el("ul",{class:"show-list"}); rs.forEach(function(sh){ var f = followedAs(sh); ul.appendChild(showRow(f||sh, false, !f && via && via(sh))); }); return ul; };
   var sec = el("div");
   if(piRs.length){
     var extras = Array.isArray(apple) ? appleExtras(piRs, apple) : [];
@@ -1815,7 +1847,7 @@ function importOpml(f, status){
       if(i >= feeds.length) return Promise.resolve();
       var f = feeds[i++];
       return matchFeed(f).then(function(sh){
-        if(!S.subs[sh.id]){ sh.fT = Date.now(); S.subs[sh.id] = sh; added++; } if(!sh.itunesId && !sh.piId) unmatched++;
+        if(!followedAs(sh)){ sh.fT = Date.now(); S.subs[sh.id] = sh; added++; } if(!sh.itunesId && !sh.piId) unmatched++;
       }).catch(function(){}).then(function(){ done++; status.textContent = "Matching "+done+" of "+feeds.length+" shows…"; save(); return next(); });
     }
     return Promise.all([next(), next(), next()]).then(function(){
@@ -3495,6 +3527,7 @@ function runSync(tries, keepalive){
     var lost = rd ? Object.keys(rd.subs||{}).filter(function(id){ return !merged.subs[id] && !(merged.unf && merged.unf[id]); }) : [];
     if(lost.length){ var ge = new Error("Sync stopped so it wouldn't remove "+lost.length+" show"+(lost.length===1?"":"s")+" from Dropbox. Nothing was changed. Earlier copies, below, can put a good copy back."); ge.guard = true; throw ge; }
     applyMerged(merged);
+    if(rd && foldDupes().length) render();
     var out = copy(snap());
     if(rd && same(out, pickSnap(rd))){ setBase(out); return; }
     var file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
