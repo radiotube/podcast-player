@@ -45,7 +45,7 @@ function mkEnd(){ if(mkW){ try{ mkW.terminate(); }catch(e){} mkW = null; } Objec
 function mkRun(audio){
   return new Promise(function(res, rej){
     var id = ++mkId; mkCb[id] = {res:res, rej:rej};
-    mkWorker().postMessage({type:"run", id:id, audio:audio}, [audio.buffer]);
+    mkWorker().postMessage({type:"run", id:id, audio:audio, word:/word=1/.test(location.search)}, [audio.buffer]);
   });
 }
 function mkBytes(start, len){
@@ -139,7 +139,8 @@ function step(){
     var n = Math.min(J.buf.length, MK_WIN*MK_SR);
     var win = J.buf.slice(0, n), sec = n/MK_SR, last = J.eof && n===J.buf.length;
     return mkRun(win).then(function(m){
-      log("window at "+f2(J.bufT)+" raw: "+(m.lines||[]).map(function(l){return "["+l.s+"-"+l.e+"] "+l.b.slice(0,40);}).join(" | "));
+      if(/word=1/.test(location.search)){ log("window at "+f2(J.bufT)+" ms="+Math.round(m.ms)+" words: "+(m.lines||[]).map(function(l){return (J.bufT+l.s).toFixed(2)+":"+l.b;}).join(" ")); J.bufT += sec; J.buf = J.buf.slice(n); return; }
+      log("window at "+f2(J.bufT)+" ms="+Math.round(m.ms)+" raw: "+(m.lines||[]).map(function(l){return "["+l.s+"-"+l.e+"] "+l.b.slice(0,40);}).join(" | "));
       var lines = (m.lines||[]).filter(function(l){ return l.b && l.s!=null && l.s < sec; }), cut = sec;
       if(!last && lines.length){
         var tail = lines[lines.length-1];
