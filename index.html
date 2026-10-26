@@ -809,7 +809,7 @@ function renderHome(top, view){
   var oSec = el("section");
   oSec.appendChild(el("h2",{class:"section-label", text:"Other subscriptions"}));
   if(!others.length){
-    oSec.appendChild(el("p",{class:"note", text: filterCat ? (showCaughtUp ? "Nothing else in this subject." : "Nothing else with something left to hear here.") : "Shows you follow without starring land here, grouped by subject. Find shows in Search, or bring your Overcast list over in Settings."}));
+    oSec.appendChild(el("p",{class:"note", text: filterCat ? (showCaughtUp ? "Nothing else in this subject." : "Nothing else with something left to hear here.") : "Shows you follow without starring land here, grouped by subject. Find shows in Search, or bring your list over from another podcast app in Settings."}));
   } else if(filterCat || !subs.length){
     var ol = el("ul",{class:"show-list"}); others.forEach(function(sh){ ol.appendChild(showRow(sh, !!filterCat)); }); oSec.appendChild(ol);
   } else {
@@ -1665,12 +1665,13 @@ function renderSettings(top, view){
   var status = el("p",{class:"status", id:"importStatus", "aria-live":"polite"});
   var file = el("input",{type:"file", id:"opml", accept:".opml,.xml,text/xml,application/xml,text/x-opml", hidden:true, onchange:function(){ if(this.files[0]) importOpml(this.files[0], status); this.value=""; }});
   view.appendChild(el("div",{class:"card"},[
-    el("h3",{text:"Bring your shows over from Overcast"}),
+    el("h3",{text:"Bring your shows over from another podcast app"}),
     el("ol",{class:"steps"},[
-      el("li",{text:"In Overcast, tap the Overcast logo at the top left, then Settings."}),
-      el("li",{text:"Scroll down, tap Export OPML, and save the file to Files."}),
+      el("li",{text:"In your old podcast app, find Export OPML. Most apps have it, usually in Settings."}),
+      el("li",{text:"Save the file to Files."}),
       el("li",{text:"Come back here, tap Import OPML file, and pick that file."})
     ]),
+    el("p",{class:"note", text:"In Overcast, for example: tap the Overcast logo at the top left, then Settings, then Export OPML."}),
     el("div",{class:"btn-row"},[ el("button",{class:"btn", text:"Import OPML file", onclick:function(){ file.click(); }}) ]),
     file, status
   ]));
@@ -1755,7 +1756,7 @@ function importOpml(f, status){
     var x = new DOMParser().parseFromString(txt, "application/xml");
     var outs = Array.prototype.slice.call(x.querySelectorAll("outline[xmlUrl], outline[xmlurl]"));
     var feeds = outs.map(function(o){ return {url:o.getAttribute("xmlUrl")||o.getAttribute("xmlurl"), title:o.getAttribute("title")||o.getAttribute("text")||""}; }).filter(function(f){return f.url;});
-    if(!feeds.length){ status.className="status err"; status.textContent = "That file has no podcast feeds in it. Make sure it's the OPML export from Overcast."; return; }
+    if(!feeds.length){ status.className="status err"; status.textContent = "That file has no podcast feeds in it. Make sure it's an OPML export from your podcast app."; return; }
     var done = 0, added = 0, unmatched = 0, i = 0;
     status.textContent = "Matching 0 of "+feeds.length+" shows…";
     function next(){
@@ -1769,7 +1770,7 @@ function importOpml(f, status){
       save(true);
       status.textContent = "Done. Added "+added+" new show"+(added===1?"":"s")+" from "+feeds.length+" in the file."+(unmatched? " "+unmatched+" weren't found in a directory and may not load.":"")+" Star your favorites and give shows a subject on their pages.";
     });
-  }).catch(function(){ status.className="status err"; status.textContent = "Couldn't read that file. Try exporting it from Overcast again."; });
+  }).catch(function(){ status.className="status err"; status.textContent = "Couldn't read that file. Try exporting it from your podcast app again."; });
 }
 function matchFeed(f){
   var want = normUrl(f.url);
