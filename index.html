@@ -233,6 +233,12 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .cue .who{display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
 .tx-msg{padding:16px;color:var(--muted);font-size:15px}
 .tx-msg a{color:var(--accent)}
+.tx-note{padding:4px 12px 8px;color:var(--muted);font-size:13px}
+.mk-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;margin-bottom:8px;background:var(--surface);border-radius:12px;font-size:14px;color:var(--muted)}
+.mk-bar[hidden]{display:none}
+.mk-bar .mk-t{flex:1 1 180px}
+.mk-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 10px;font-size:14px;color:var(--muted)}
+.mk-row span{flex:1 1 180px}
 
 /* Episode tabs, sort and listened marks */
 .ep-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -313,6 +319,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     <video id="video" playsinline webkit-playsinline preload="metadata" hidden></video>
     <audio id="audio" preload="metadata"></audio>
     <div class="tx-wrap" id="txWrap">
+      <div class="mk-bar" id="mkBar" hidden></div>
       <div class="tx-box" id="txBox" aria-label="Transcript"></div>
       <button class="tx-size" id="txSize" hidden>Smaller view</button>
       <button class="tx-now" id="txNow" hidden>Back to now</button>
@@ -1205,6 +1212,7 @@ function fillDetails(box, e, sh, close){
   if(hi) fact("Highlighted", "It mentions \u201c"+hi+"\u201d");
   if(e.tr && e.tr.length) fact("Transcript", "Yes. Play it, then tap Transcript in the player.");
   box.appendChild(el("dl",{class:"facts"}, facts));
+  if(!(e.tr && e.tr.length) && !e.v) box.appendChild(makeRow(e, sh));
   var chBox = null;
   if(e.ch){ chBox = el("div",{class:"chapters"},[ el("h4",{text:"Chapters"}), el("p",{class:"note", text:"Loading chapters…"}) ]); box.appendChild(chBox); loadChapterList(e, chBox); }
   var notesWrap = el("div"); box.appendChild(notesWrap);
@@ -1223,6 +1231,29 @@ function fillDetails(box, e, sh, close){
     episodesFor(sh, true).then(function(){ if(box.isConnected) drawNotes(false); }, function(){ if(box.isConnected) drawNotes(false); });
   }
   box.appendChild(el("button",{class:"pill-btn hide-details", text:"Hide details", onclick:close}));
+}
+/* In the details of an episode with no transcript of its own: one the app made, the one being made, or a button to make one. */
+function makeRow(e, sh){
+  var row = el("div",{class:"mk-row"}), sid = sh && sh.id || e.s;
+  var draw = function(o){
+    row.innerHTML = "";
+    var J = MK && MK.g===e.g ? MK : null;
+    if(J && (!J.dead || J.st!=="done")){
+      row.appendChild(el("span",{text:mkText(J)}));
+      if(!J.dead && J.st!=="net") row.appendChild(el("button",{class:"pill-btn", text:"Stop", onclick:mkStop}));
+      else if(J.st==="stopped" || J.st==="net") row.appendChild(el("button",{class:"pill-btn", text:"Continue", onclick:function(){ if(MK.st==="net" && !MK.dead){ MK.st = "run"; MK.retry = 0; mkStep(); } else { MK = null; mkStart(e, sh); } }}));
+      return;
+    }
+    if(o || (J && J.st==="done" && J.segs.length)){ row.appendChild(el("span",{text:"Transcript: made by this app. Play the episode, then tap Transcript in the player."})); return; }
+    if(!mkOn()){ row.hidden = true; return; }
+    row.hidden = false;
+    row.appendChild(el("span",{text:"No transcript from the show. The app can make one on this device. It takes a while and works only while the app is on screen."}));
+    row.appendChild(el("button",{class:"pill-btn", text:"Make a transcript", onclick:function(){ mkStart(Object.assign({s:sid}, e), sh); draw(null); }}));
+  };
+  row.hidden = true;
+  mkFind(sid, e.g).then(function(o){ row.hidden = false; draw(o); });
+  mkRows.push({row:row, fn:function(){ draw(MK && MK.g===e.g && mkMade[MK.key] ? mkMade[MK.key] : null); }});
+  return row;
 }
 var chapterLists = {};
 function loadChapterList(e, box){
@@ -1633,6 +1664,7 @@ function renderSettings(top, view){
     S.trim || trimSavedAll() >= 1 ? el("p",{class:"status", text:"Time saved so far across all shows: "+savedText(trimSavedAll())+". Each show's page shows its own total and whether trimming is on for it."}) : document.createTextNode("")
   ]));
 
+  view.appendChild(makeCard());
   view.appendChild(syncCard());
 
   var qn = quietShows().length;
@@ -2228,10 +2260,10 @@ function updatePositionState(){
 }
 
 /* ---------- Transcripts (Podcasting 2.0 podcast:transcript) ---------- */
-var cues = [], cueEls = [], cueIdx = -1, txFor = "";
+var cues = [], cueEls = [], cueIdx = -1, txFor = "", txKind = "";
 /* Every word on screen, in order: {s, e, el, c (its line in cues), real (the show timed this word itself), li (screen row)} */
 var words = [], rows = null, wordIdx = -1, follow = true;
-function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; words = []; rows = null; wordIdx = -1; setFollow(true); var box = $("txBox"); box.innerHTML = ""; box.style.removeProperty("--txpad"); $("txSize").hidden = true; }
+function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; txKind = ""; setTimeout(mkUI, 0); words = []; rows = null; wordIdx = -1; setFollow(true); var box = $("txBox"); box.innerHTML = ""; box.style.removeProperty("--txpad"); $("txSize").hidden = true; }
 function txBig(){ return S.txBig !== false; }
 function txLayout(){ var p = $("player"); p.classList.toggle("txbig", txBig()); $("txSize").textContent = txBig() ? "Smaller view" : "Bigger view"; rows = null; txKick(); }
 $("txBtn").onclick = function(){
@@ -2263,11 +2295,11 @@ function findTranscripts(c){
   }).catch(function(){ return null; });
 }
 function loadTranscript(c){
-  txFor = c.g; txMsg("Looking for a transcript…");
+  txFor = c.g; txKind = ""; txMsg("Looking for a transcript…"); mkUI();
   findTranscripts(c).then(function(list){
     if(!cur || cur.g!==c.g) return;
-    if(list===null){ txMsg("Couldn't check this show's feed for a transcript. Adding your Podcast Index key in Settings helps find them."); return; }
-    if(!list.length){ txMsg("This episode doesn't come with a transcript. Transcripts show up here when a show publishes one."); return; }
+    if(list===null || !list.length) return madeTranscript(c, list===null ? "Couldn't check this show's feed for a transcript. Adding your Podcast Index key in Settings helps find them." : "This episode doesn't come with a transcript. Transcripts show up here when a show publishes one.");
+    txKind = "pub"; mkUI();
     var rank = function(t){ var s=(t.type||"")+" "+t.url; return /json/i.test(s)?0 : /vtt/i.test(s)?1 : /srt|subrip/i.test(s)?2 : /html/i.test(s)?3 : 4; };
     var pick = list.slice().sort(function(a,b){return rank(a)-rank(b);})[0];
     return fetch(pick.url).then(function(r){ if(!r.ok) throw 0; return r.text(); }).then(function(txt){
@@ -2276,6 +2308,19 @@ function loadTranscript(c){
       if(!cues.length){ txMsg("The transcript file was empty or in a format this app can't read.", pick.url); return; }
       drawTranscript();
     }).catch(function(){ txMsg("This show has a transcript, but its server won't let the app load it.", pick.url); });
+  });
+}
+/* No transcript from the show: use one the app made earlier (on this device or another, through Dropbox),
+   show the one being made now, or offer to make one. */
+function madeTranscript(c, msg){
+  if(MK && MK.g===c.g && !MK.dead){ txKind = "made"; txMsg("Starting the transcript…"); mkUI(); mkShowLive(); return; }
+  txMsg("Looking for a transcript…");
+  mkFind(c.s, c.g).then(function(o){
+    if(!cur || cur.g!==c.g || txFor!==c.g) return;
+    if(o && o.segs && o.segs.length){ txKind = "made"; cues = segCues(o.segs); drawTranscript("Made by this app with speech recognition, so it may have mistakes."); mkUI(); return; }
+    txKind = "none";
+    txMsg(msg + (mkOn() || c.v ? "" : " You can also have the app make one: turn on Make transcripts in Settings."));
+    mkUI();
   });
 }
 function tsec(s){ var p = String(s).trim().replace(",",".").split(":").map(parseFloat); return p.reduce(function(a,b){return a*60+b;},0); }
@@ -2318,9 +2363,10 @@ function pieceWords(pc, next){
   var total = ws.reduce(function(a,w){ return a + w.length + 1; }, 0), at = 0;
   return ws.map(function(w){ var s0 = pc.s + (e-pc.s)*at/total; at += w.length + 1; return {s:s0, e:pc.s + (e-pc.s)*at/total, b:w, real:ws.length===1}; });
 }
-function drawTranscript(){
+function drawTranscript(note){
   var box = $("txBox"); box.innerHTML = ""; cueEls = []; cueIdx = -1; words = []; rows = null; wordIdx = -1;
   var timed = cues.some(function(c){return c.s>=0;});
+  if(note) box.appendChild(el("p",{class:"tx-note", text:note}));
   if(!timed) box.appendChild(el("p",{class:"tx-msg", text:"This transcript has no timings, so it won't follow along."}));
   cues.forEach(function(c, ci){
     var b = el(timed?"button":"p",{class:"cue"},[ c.w? el("span",{class:"who", text:c.w}) : null ]);
@@ -2446,6 +2492,359 @@ function txTick(now){
   document.addEventListener("visibilitychange", function(){ txKick(); });
   if(window.ResizeObserver) new ResizeObserver(function(){ rows = null; txKick(); }).observe(box);
 })();
+
+/* ---------- Made transcripts ----------
+   When an episode has no transcript of its own, the app can make one with speech recognition that runs
+   right on the device (tx-worker.js: Whisper, English). Free, off unless switched on in Settings, MP3 only,
+   and only from podcast hosts that let the app read the audio. The episode is read in slices; each slice is
+   cut at whole MP3 frames, so the times come from counting frames and stay exact. A finished transcript is
+   kept on the device and put in Dropbox (transcripts/<id>.json, added once, never written over), so each
+   episode is made once and shows on every device signed in to the same Dropbox. */
+var MK = null, MK_WIN = 30, MK_SR = 16000, MK_SLICE = 393216, MK_MODEL_MB = 41;
+var mkRows = [], mkMade = {}, mkMiss = {}, mkW = null, mkCb = {}, mkId = 0, mkLock = null;
+var MK_MSG = {
+  blocked:"This show's server won't let the app read its audio, so the app can't make a transcript for it.",
+  format:"This episode isn't an MP3 file, and the transcript maker can only read MP3s.",
+  video:"The transcript maker works on audio episodes, not video.",
+  net:"The connection dropped. Tap Continue to pick up where it stopped.",
+  model:"Couldn't load the speech model.",
+  decode:"This device couldn't read the sound in this episode's file.",
+  failed:"Something went wrong while making the transcript."
+};
+function mkOn(){ return S.txMake === true; }
+function mkKey(sid, g){
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(sid)+"|"+String(g))).then(function(b){
+    return Array.prototype.map.call(new Uint8Array(b).slice(0, 12), function(x){ return (x<16?"0":"")+x.toString(16); }).join("");
+  });
+}
+/* On the device: finished ones under __tx/, unfinished ones (to continue later) under __txp/. */
+function mkStore(){ return ("caches" in window) ? caches.open("pp-tx") : Promise.reject(new Error("nocache")); }
+function mkReq(kind, key){ return new Request(location.origin + location.pathname.replace(/[^\/]*$/,"") + "__" + kind + "/" + key + ".json"); }
+function mkGetLocal(kind, key){ return mkStore().then(function(c){ return c.match(mkReq(kind, key)); }).then(function(r){ return r ? r.json() : null; }).catch(function(){ return null; }); }
+function mkPutLocal(kind, key, o){ return mkStore().then(function(c){ return c.put(mkReq(kind, key), new Response(JSON.stringify(o), {headers:{"Content-Type":"application/json"}})); }).catch(function(){}); }
+function mkDelLocal(kind, key){ return mkStore().then(function(c){ return c.delete(mkReq(kind, key)); }).catch(function(){}); }
+/* In Dropbox, next to sync.json but in files of their own, so they never touch it. */
+function mkPath(key){ return "/transcripts/"+key+".json"; }
+function mkDbxGet(key){
+  if(!dbx) return Promise.resolve(null);
+  return dbxCall("https://content.dropboxapi.com/2/files/download", {"Dropbox-API-Arg":JSON.stringify({path:mkPath(key)})}).then(function(r){
+    if(!r.ok) return null; return r.json().catch(function(){ return null; });
+  }).catch(function(){ return null; });
+}
+/* Added once. If another device already put this episode's transcript there, that copy stays. */
+function mkDbxPut(key, o){
+  if(!dbx) return Promise.resolve(false);
+  var arg = {path:mkPath(key), mode:{".tag":"add"}, autorename:false, mute:true, strict_conflict:true};
+  var body = JSON.stringify({v:o.v, g:o.g, sid:o.sid, t:o.t, show:o.show, made:o.made, by:o.by, dur:o.dur, segs:o.segs});
+  return dbxCall("https://content.dropboxapi.com/2/files/upload", {"Dropbox-API-Arg":JSON.stringify(arg)}, body).then(function(r){
+    if(r.ok) return true;
+    return dbxJson(r).then(function(j){ if(r.status===409 && /conflict/.test(j.error_summary||"")) return true; return false; });
+  }).catch(function(){ return false; });
+}
+function mkFind(sid, g){
+  return mkKey(sid, g).then(function(key){
+    if(mkMade[key]) return mkMade[key];
+    return mkGetLocal("tx", key).then(function(o){
+      if(o && o.segs) return (mkMade[key] = o);
+      if(mkMiss[key] && Date.now()-mkMiss[key] < 10*60*1000) return null;
+      return mkDbxGet(key).then(function(d){
+        if(d && d.segs){ d.up = true; mkMade[key] = d; mkPutLocal("tx", key, d); return d; }
+        mkMiss[key] = Date.now(); return null;
+      });
+    });
+  }).catch(function(){ return null; });
+}
+/* Finished transcripts that haven't reached Dropbox yet (no connection, or not signed in then). */
+function mkFlush(){
+  if(!dbx || !("caches" in window) || mkFlush.busy) return;
+  mkFlush.busy = true;
+  mkStore().then(function(c){ return c.keys().then(function(ks){
+    return ks.filter(function(k){ return /\/__tx\/[0-9a-f]+\.json$/.test(k.url); }).reduce(function(p, k){
+      return p.then(function(){ return c.match(k).then(function(r){ return r && r.json(); }).then(function(o){
+        if(!o || o.up || !o.segs) return;
+        var key = /__tx\/([0-9a-f]+)\.json$/.exec(k.url)[1];
+        return mkDbxPut(key, o).then(function(ok){ if(ok){ o.up = true; mkMade[key] = o; return mkPutLocal("tx", key, o); } });
+      }); });
+    }, Promise.resolve());
+  }); }).catch(function(){}).then(function(){ mkFlush.busy = false; });
+}
+
+/* The speech model runs in a worker so the app stays smooth. */
+function mkWorker(){
+  if(mkW) return mkW;
+  mkW = new Worker("tx-worker.js", {type:"module"});
+  mkW.onmessage = function(ev){
+    var m = ev.data || {};
+    if(m.type==="load"){ if(MK && !MK.dead){ MK.dl = m; mkUI(); } return; }
+    var cb = mkCb[m.id]; if(!cb) return; delete mkCb[m.id];
+    if(m.type==="error") cb.rej(new Error(m.msg||"error")); else cb.res(m);
+  };
+  mkW.onerror = function(ev){
+    var e = new Error("model: "+((ev && ev.message) || "the speech model wouldn't start")); e.model = true;
+    Object.keys(mkCb).forEach(function(id){ mkCb[id].rej(e); }); mkCb = {};
+    if(ev && ev.preventDefault) ev.preventDefault();
+    mkEnd();
+  };
+  return mkW;
+}
+function mkEnd(){ if(mkW){ try{ mkW.terminate(); }catch(e){} mkW = null; } Object.keys(mkCb).forEach(function(id){ mkCb[id].rej(new Error("stopped")); }); mkCb = {}; }
+function mkRun(audio){
+  return new Promise(function(res, rej){
+    var id = ++mkId; mkCb[id] = {res:res, rej:rej};
+    mkWorker().postMessage({type:"run", id:id, audio:audio}, [audio.buffer]);
+  });
+}
+/* Keeps the screen on while a transcript is being made: iPhone stops the work when the app isn't on screen. */
+function mkWake(on){
+  if(!on){ if(mkLock){ try{ mkLock.release(); }catch(e){} mkLock = null; } return; }
+  if(mkLock || !navigator.wakeLock || document.hidden) return;
+  navigator.wakeLock.request("screen").then(function(l){ mkLock = l; l.addEventListener("release", function(){ if(mkLock===l) mkLock = null; }); }, function(){});
+}
+
+/* One slice of the file. A host that ignores the byte range sends the whole file, which is then read from memory. */
+function mkBytes(start, len){
+  var J = MK;
+  if(J.mem) return Promise.resolve(J.mem.subarray(start, Math.min(J.mem.length, start+len)));
+  var ctl = new AbortController(); J.ctl = ctl;
+  var to = setTimeout(function(){ ctl.abort(); }, 60000);
+  var get = function(url){ return fetch(url, {mode:"cors", headers:{Range:"bytes="+start+"-"+(start+len-1)}, signal:ctl.signal}); };
+  return get(J.url).catch(function(e){ if(J.url!==J.u0 && !J.dead) { J.url = J.u0; return get(J.url); } throw e; }).then(function(r){
+    if(r.status===416){ clearTimeout(to); return new Uint8Array(0); }
+    if(r.status!==206 && r.status!==200){ clearTimeout(to); var e = new Error("http "+r.status); e.http = r.status; throw e; }
+    if(r.url) J.url = r.url;
+    var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||""); if(m) J.size = +m[1];
+    return r.arrayBuffer().then(function(ab){
+      clearTimeout(to); J.got = true;
+      if(r.status===200){ J.mem = new Uint8Array(ab); J.size = J.mem.length; return J.mem.subarray(start, Math.min(J.mem.length, start+len)); }
+      return new Uint8Array(ab);
+    });
+  }, function(e){ clearTimeout(to); throw e; });
+}
+function mkDecode(bytes){
+  var C = window.OfflineAudioContext || window.webkitOfflineAudioContext; if(!C) return Promise.reject(new Error("noaudio"));
+  if(!MK.ctx) MK.ctx = new C(1, 1, MK_SR);
+  var ctx = MK.ctx, buf = bytes.slice().buffer;
+  return new Promise(function(res, rej){ var p = ctx.decodeAudioData(buf, res, rej); if(p && p.then) p.then(res, rej); });
+}
+function mkCat(a, b){ var o = new Float32Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; }
+/* Where the audio starts: after any ID3 tag, and past an Xing or Info header frame (which holds no sound). */
+function mkHead(){
+  var J = MK;
+  return mkBytes(0, MK_SLICE).then(function(b){
+    if(b.length > 8 && String.fromCharCode(b[4],b[5],b[6],b[7])==="ftyp") throw new Error("format");
+    var start = 0;
+    if(b[0]===0x49 && b[1]===0x44 && b[2]===0x33) start = 10 + ((b[6]&127)<<21|(b[7]&127)<<14|(b[8]&127)<<7|(b[9]&127)) + ((b[5]&16)?10:0);
+    var more = start + 16384 > b.length ? mkBytes(start, 65536) : Promise.resolve(b.subarray(start));
+    return more.then(function(z){
+      var fr = mp3Frames(z, 0); if(fr.length < 3) throw new Error("format");
+      var h = mp3Hdr(z, fr[0]), first = z.subarray(fr[0], fr[0]+h.len), tag = false;
+      for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = true; break; } }
+      J.h = h; J.off = start + fr[0] + (tag ? h.len : 0); J.cum = 0;
+    });
+  });
+}
+function mkBufSec(){ return MK.buf.length / MK_SR; }
+/* Reads and decodes slices until there's a full window to listen to (or the file ends). */
+function mkFill(){
+  var J = MK;
+  if(J.dead || J.eof || mkBufSec() >= MK_WIN) return Promise.resolve();
+  var at = J.off;
+  return mkBytes(at, MK_SLICE).then(function(b){
+    if(J.dead) return;
+    var fr = mp3Frames(b, 0);
+    if(!fr.length){ J.eof = true; return; }
+    var lastF = mp3Hdr(b, fr[fr.length-1]), end = fr[fr.length-1] + lastF.len, n = fr.length;
+    if(b.length < MK_SLICE && end >= b.length - 4) J.eof = true;
+    if(J.size && at + end >= J.size - 4) J.eof = true;
+    var spf = J.h.spf, sr = J.h.sr, warmN = J.warm ? J.warmN : 0;
+    var bytes = J.warm ? (function(){ var o = new Uint8Array(J.warm.length + end - fr[0]); o.set(J.warm); o.set(b.subarray(fr[0], end), J.warm.length); return o; })() : b.subarray(fr[0], end);
+    J.sl.push({off:at + fr[0], cum:J.cum});
+    if(J.sl.length > 40) J.sl.shift();
+    var k = Math.max(0, n-2); J.warm = b.slice(fr[k], end); J.warmN = n - k;
+    J.off = at + end;
+    var from = Math.round(J.cum*MK_SR/sr), to = Math.round((J.cum + n*spf)*MK_SR/sr);
+    J.cum += n*spf;
+    return mkDecode(bytes).then(function(ab){
+      var ch = ab.numberOfChannels, len = ab.length, mono = new Float32Array(len), d;
+      for(var c=0;c<ch;c++){ d = ab.getChannelData(c); for(var i=0;i<len;i++) mono[i] += d[i]/ch; }
+      var skip = Math.round(warmN*spf*MK_SR/sr), want = to - from;
+      var part = mono.subarray(Math.min(skip, len), Math.min(skip + want, len));
+      if(part.length < want){ var pad = new Float32Array(want); pad.set(part); part = pad; }
+      return part;
+    }, function(){ J.bad = (J.bad||0) + 1; return null; }).then(function(part){
+      if(J.dead) return;
+      if(!part){ if(!J.good && J.bad >= 3) throw new Error("decode"); part = new Float32Array(to - from); } else J.good = (J.good||0) + 1;
+      // Continuing an unfinished transcript: drop the audio before the spot it stopped at.
+      if(J.skipTo > J.bufT){ var drop = Math.min(part.length, Math.round((J.skipTo - J.bufT)*MK_SR)); part = part.subarray(drop); J.bufT += drop/MK_SR; if(!part.length) return mkFill(); }
+      J.buf = mkCat(J.buf, part);
+      return mkFill();
+    });
+  });
+}
+var MK_JUNK = /^\s*[\[\(][^\]\)]*[\]\)]\s*$|^\s*[♪♫\s]*$/;
+/* Listens to one window, keeps its finished lines, and starts the next window where the last full line ended. */
+function mkStep(){
+  var J = MK; if(!J || J.dead || J.busy) return;
+  if(document.hidden){ J.wait = true; mkUI(); return; }
+  J.busy = true; J.wait = false; mkWake(true);
+  mkFill().then(function(){
+    if(J.dead) return;
+    var n = Math.min(J.buf.length, MK_WIN*MK_SR);
+    if(n < MK_SR/2) return mkFinish();
+    var win = J.buf.slice(0, n), sec = n/MK_SR, last = J.eof && n===J.buf.length;
+    if(J.st!=="run"){ J.st = "model"; mkUI(); }
+    return mkRun(win).catch(function(e){ if(!J.heard){ e.model = true; } else e.run = true; throw e; }).then(function(m){
+      if(J.dead) return;
+      J.st = "run"; J.dl = null; J.ms += m.ms||0; J.heard += sec;
+      var lines = (m.lines||[]).filter(function(l){ return l.b && l.s!=null && l.s < sec; }), cut = sec;
+      if(!last && lines.length){
+        var tail = lines[lines.length-1];
+        if(tail.e==null || tail.e > sec - 1){ if(tail.s >= 5){ lines.pop(); cut = tail.s; } }
+        else if(tail.e >= 5) cut = tail.e;
+      }
+      lines.forEach(function(l){
+        if(MK_JUNK.test(l.b)) return;
+        var s = J.bufT + l.s, e = J.bufT + Math.min(l.e==null ? sec : l.e, sec);
+        J.segs.push([Math.round(s*100)/100, Math.round(Math.max(s, e)*100)/100, l.b]);
+      });
+      var drop = Math.round(cut*MK_SR); J.buf = J.buf.slice(drop); J.bufT += drop/MK_SR;
+      if(last) return mkFinish();
+      mkSavePart(); mkUI(); mkShowLive();
+      J.busy = false; setTimeout(mkStep, 0);
+    });
+  }).catch(function(e){
+    if(J.dead) return;
+    J.busy = false; mkWake(false);
+    var msg = String(e && e.message || e);
+    if(msg==="format") J.st = "format";
+    else if(msg==="stopped") return;
+    else if(e && e.model){ J.st = "model"; J.err = msg.replace(/^model:\s*/,""); }
+    else if(e && e.run){ J.st = "failed"; J.err = msg; }
+    else if(msg==="decode") J.st = "decode";
+    else if(!J.got && !J.resumed) J.st = "blocked";
+    else { J.st = "net"; J.retry = (J.retry||0) + 1; if(J.retry <= 3 && !document.hidden){ setTimeout(function(){ if(MK===J && !J.dead && J.st==="net") { J.st = "run"; mkStep(); } }, 4000); } }
+    if(J.st!=="net" && J.st!=="run"){ J.dead = true; mkEnd(); }
+    mkUI();
+  }).then(function(){ if(J.busy && J.dead) J.busy = false; });
+}
+function mkResumePoint(){
+  var J = MK, sr = J.h.sr, at = null;
+  for(var i=J.sl.length-1;i>=0;i--){ if(J.sl[i].cum/sr <= J.bufT){ at = J.sl[i]; break; } }
+  return at;
+}
+function mkSavePart(){
+  var J = MK, p = mkResumePoint(); if(!p || !J.key) return;
+  mkPutLocal("txp", J.key, {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, u:J.u0, off:p.off, cum:p.cum, h:J.h, bufT:J.bufT, segs:J.segs, size:J.size||0, at:Date.now()});
+}
+function mkFinish(){
+  var J = MK; if(!J || J.dead) return;
+  J.dead = true; J.busy = false; mkEnd(); mkWake(false);
+  var o = {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, made:new Date().toISOString(), by:"whisper-tiny.en", dur:Math.round(J.bufT), segs:J.segs, up:false};
+  J.st = "done"; J.made = o; mkMade[J.key] = o; delete mkMiss[J.key];
+  mkPutLocal("tx", J.key, o).then(function(){ return mkDelLocal("txp", J.key); }).then(function(){
+    return mkDbxPut(J.key, o).then(function(ok){ if(ok){ o.up = true; mkPutLocal("tx", J.key, o); } J.up = ok; mkUI(); });
+  });
+  toast(J.segs.length ? "Transcript ready: "+J.t : "Finished, but no speech was found in "+J.t);
+  mkUI(); mkShowLive(true);
+}
+/* Start (or continue) making a transcript for an episode. */
+function mkStart(e, sh){
+  if(MK && !MK.dead){ if(MK.g===e.g){ if(MK.st==="net"){ MK.st = "run"; MK.retry = 0; mkStep(); } return; } toast("Already making one for "+MK.t+". Stop it first."); return; }
+  var sid = (sh && sh.id) || e.s, u = String(e.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
+  var J = MK = {g:e.g, sid:sid, t:e.t||"", show:(sh && sh.title) || showOf(sid).title || "", u0:u, url:u, len:e.len||0, st:"start", segs:[], buf:new Float32Array(0), bufT:0, skipTo:0, sl:[], ms:0, heard:0, started:Date.now()};
+  if(e.v || isVideo(e.ty, e.u)){ J.st = "video"; J.dead = true; mkUI(); return; }
+  mkUI();
+  mkKey(sid, e.g).then(function(key){ J.key = key; return mkGetLocal("txp", key); }).then(function(p){
+    if(J.dead) return;
+    if(p && p.h && p.u===J.u0){ J.h = p.h; J.off = p.off; J.cum = p.cum; J.bufT = p.cum/p.h.sr; J.skipTo = p.bufT; J.segs = p.segs||[]; J.size = p.size||0; J.resumed = true; return; }
+    return mkHead();
+  }).then(function(){ if(!J.dead){ J.st = J.st==="start" ? "model" : J.st; mkUI(); mkStep(); } }).catch(function(err){
+    if(J.dead) return;
+    J.st = String(err && err.message)==="format" ? "format" : (J.got ? "failed" : "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
+  });
+}
+function mkStop(){
+  var J = MK; if(!J) return;
+  if(!J.dead){ J.dead = true; if(J.ctl) try{ J.ctl.abort(); }catch(e){} mkEnd(); mkWake(false); if(J.segs.length) mkSavePart(); }
+  J.st = "stopped"; mkUI();
+}
+document.addEventListener("visibilitychange", function(){
+  if(document.hidden || !MK || MK.dead) return;
+  mkWake(true);
+  if(MK.wait || MK.st==="net"){ MK.st = MK.st==="net" ? "run" : MK.st; MK.retry = 0; mkStep(); }
+});
+setTimeout(mkFlush, 15000);
+
+function mkTotal(J){
+  if(J.len) return J.len;
+  if(cur && cur.g===J.g && dur()) return dur();
+  if(J.size && J.h) return (J.size - (J.off||0) + (J.cum/J.h.sr)*J.h.br*125) / (J.h.br*125);
+  return 0;
+}
+/* A line of words about how it's going, for the player and the episode details. */
+function mkText(J){
+  if(!J) return "";
+  if(J.st==="start") return "Getting the episode ready…";
+  if(J.st==="model" && !J.dead){
+    if(J.dl && J.dl.total) return "Downloading the speech model, "+Math.round(J.dl.loaded/1048576)+" of "+Math.round(J.dl.total/1048576)+" MB (first time only)…";
+    return J.resumed && J.segs.length ? "Picking up where it stopped…" : "Loading the speech model…";
+  }
+  if(J.st==="run"){
+    var tot = mkTotal(J), pct = tot ? Math.min(99, Math.floor(J.bufT/tot*100)) : 0;
+    var t = "Making transcript: "+fmt(J.bufT)+(tot ? " of "+fmt(tot)+" ("+pct+"%)" : "");
+    if(J.heard > 60 && J.ms && tot){ var per = (J.ms/1000)/J.heard, left = Math.max(0, (tot - J.bufT)*per*1.1); t += ", about "+fmtDur(Math.max(60, left))+" to go"; }
+    return t + (J.wait ? ". Paused while the app was off screen" : "");
+  }
+  if(J.st==="done") return J.segs.length ? "Transcript made"+(J.up===false ? ". It's saved on this device and goes to Dropbox once you're signed in." : ".") : "Finished, but no speech was found.";
+  if(J.st==="stopped") return "Stopped at "+fmt(J.bufT)+". Continue picks up from there.";
+  return (MK_MSG[J.st] || MK_MSG.failed) + ((J.st==="model" || J.st==="failed") && J.err ? " ("+J.err+")" : "");
+}
+/* The bar above the transcript in the player. */
+function mkUI(){
+  var bar = $("mkBar"); if(!bar) return;
+  bar.innerHTML = "";
+  var c = cur, J = MK && c && MK.g===c.g ? MK : null;
+  if(J){
+    var live = !J.dead && J.st!=="net", txt = mkText(J);
+    bar.appendChild(el("span",{class:"mk-t", text:txt}));
+    if(live) bar.appendChild(el("button",{class:"pill-btn", text:"Stop", onclick:mkStop}));
+    else if(J.st==="stopped" || J.st==="net") bar.appendChild(el("button",{class:"pill-btn", text:"Continue", onclick:function(){ if(MK.st==="net" && !MK.dead) { MK.st = "run"; MK.retry = 0; mkStep(); } else { MK = null; mkStart(c, showOf(c.s)); } }}));
+    bar.hidden = J.st==="done" && J.up!==false;
+  } else if(c && txFor===c.g && txKind==="none" && mkOn() && !c.v){
+    bar.appendChild(el("span",{class:"mk-t", text:"The app can make a transcript for this episode on this phone. It takes a while and works only while the app is on screen."}));
+    bar.appendChild(el("button",{class:"pill-btn", text:"Make a transcript", onclick:function(){ mkStart(c, showOf(c.s)); mkShowLive(); }}));
+    bar.hidden = false;
+  } else bar.hidden = true;
+  mkRows = mkRows.filter(function(r){ return r.row.isConnected; }); mkRows.forEach(function(r){ r.fn(); });
+}
+/* Shows the transcript in the player as it grows, when the player is on that episode. */
+function mkShowLive(final){
+  var J = MK; if(!J || !cur || cur.g!==J.g || txFor!==J.g) return;
+  if(!J.segs.length){ if(final) txMsg("No speech was found in this episode."); return; }
+  var box = $("txBox"), was = follow, top = box.scrollTop;
+  txKind = "made";
+  cues = segCues(J.segs); drawTranscript(final ? "Made by this app with speech recognition, so it may have mistakes." : "Being made now. More appears as the app works through the episode.");
+  if(!was && words.length){ box.scrollTop = top; setFollow(false); }
+}
+function segCues(segs){ return mergeCues(segs.map(function(s){ return {s:s[0], e:s[1], w:"", b:s[2]}; })); }
+
+function makeCard(){
+  var on = mkOn();
+  var sel = el("select",{id:"mkSel"},[ el("option",{value:"0", text:"Off", selected:!on}), el("option",{value:"1", text:"On", selected:on}) ]);
+  sel.onchange = function(){ S.txMake = this.value==="1"; save(false, true); mkUI(); render(); };
+  var card = el("div",{class:"card"},[
+    el("h3",{text:"Make transcripts"}),
+    el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkSel"},[ "Make transcripts on this device", sel ]) ]),
+    el("p",{text:"When an episode has no transcript of its own, the app can make one with speech recognition that runs right on this device. It's free and nothing is sent to anyone. Each one is made only when you tap Make a transcript, in the player's Transcript view or in an episode's details."}),
+    el("p",{text:"The first time, the app downloads a speech model of about "+MK_MODEL_MB+" MB and keeps it. Making a transcript works through the whole episode, so it takes a while and uses the battery hard. It only runs while the app is open on screen, so the screen stays on until it's done. If it stops, it can pick up where it left off. English only, and it will have some mistakes."}),
+    el("p",{text:"It works on MP3 episodes from podcast hosts that let the app read the audio, the same ones that can trim long pauses. Finished transcripts are saved in your Dropbox, so each episode is made once and shows on all your devices. Skip and highlight words still look only at titles and descriptions."}),
+    el("p",{text:"This setting is kept on each device, so you can leave it off on the iPhone and on for the iPad or computer."})
+  ]);
+  if("caches" in window) card.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Remove the speech model", onclick:function(){
+    var b = this; caches.delete("transformers-cache").then(function(had){ toast(had ? "Speech model removed. It downloads again next time." : "The speech model isn't on this device."); b.disabled = true; });
+  }}) ]));
+  return card;
+}
 
 /* ---------- Dropbox sync ----------
    Each person signs in with their own Dropbox. The app gets one folder of its own there

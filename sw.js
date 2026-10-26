@@ -1,8 +1,9 @@
 // Keeps the app itself available when the connection drops. Podcast audio and video always stream.
-const CACHE = "pp-shell-v34";
-const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./favicon.ico?v=2", "./icons/n5pre2-180.png", "./icons/n5pre2-32.png", "./icons/n5pre2-192.png", "./icons/n5pre2-512.png"];
+// Only the app's own old copies are cleared on update; the speech model and made transcripts stay.
+const CACHE = "pp-shell-v35";
+const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./favicon.ico?v=2", "./icons/n5pre2-180.png", "./icons/n5pre2-32.png", "./icons/n5pre2-192.png", "./icons/n5pre2-512.png", "./tx-worker.js"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
-self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.indexOf("pp-shell") === 0 && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
