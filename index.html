@@ -1672,6 +1672,7 @@ function renderSettings(top, view){
       el("li",{text:"Come back here, tap Import OPML file, and pick that file."})
     ]),
     el("p",{class:"note", text:"In Overcast, for example: tap the Overcast logo at the top left, then Settings, then Export OPML."}),
+    el("p",{class:"note", text:"Apple Podcasts can't export OPML on its own, so coming from Apple you'll need a separate export tool first."}),
     el("div",{class:"btn-row"},[ el("button",{class:"btn", text:"Import OPML file", onclick:function(){ file.click(); }}) ]),
     file, status
   ]));
