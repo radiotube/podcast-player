@@ -261,8 +261,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .chips.wrap{flex-wrap:wrap;overflow:visible}
 .chip.caught{opacity:.5}
 .order-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.order-row{display:grid;grid-template-columns:22px minmax(0,1fr) auto 44px 44px;gap:8px;align-items:center;padding:4px 0}
-.order-row .rank{font:600 14px var(--mono);color:var(--accent);text-align:center;font-variant-numeric:tabular-nums}
+.order-row{display:grid;grid-template-columns:minmax(0,1fr) auto 44px 44px;gap:8px;align-items:center;padding:4px 0}
 .order-row .name{font-weight:650;font-size:16px;overflow-wrap:anywhere}
 .order-row .count{font-size:14px;color:var(--muted)}
 .btn.small{padding:8px 12px;min-height:44px;font-size:14px}
@@ -1331,7 +1330,7 @@ function quietCard(sh){
   ]);
 }
 function renderOrder(top, view){
-  var back = route.from==="settings" ? {tab:"settings", label:"Settings"} : {tab:"home", label:"Shows"};
+  var back = route.tab==="settings" ? {tab:"settings", label:"Settings"} : {tab:"home", label:"Shows"};
   top.appendChild(el("button",{class:"back", html:ICON.chev+"<span>"+back.label+"</span>", onclick:function(){ go({tab:back.tab}); }}));
   top.appendChild(el("div",{class:"sub-title", text:"Subject order"}));
   top.appendChild(el("span",{style:"width:60px"}));
@@ -1343,8 +1342,7 @@ function renderOrder(top, view){
   list.forEach(function(c, i){
     var n = Object.keys(S.subs).filter(function(id){ return catsOf(S.subs[id]).indexOf(c)>=0; }).length;
     ol.appendChild(el("li",{class:"order-row"},[
-      el("span",{class:"rank", text:String(i+1)}),
-      el("div",{class:"meta"},[ el("div",{class:"name", text:c}), el("div",{class:"count", text:n+" show"+(n===1?"":"s")}) ]),
+      el("div",{class:"meta"},[ el("div",{class:"name", text:(i+1)+". "+c}), el("div",{class:"count", text:n+" show"+(n===1?"":"s")}) ]),
       el("button",{class:"btn secondary small", text:"To front", disabled:i===0, "aria-label":"Move "+c+" to the front", onclick:function(){ moveCat(c, 0); toast(c+" is now next to All"); }}),
       el("button",{class:"icon-btn", "aria-label":"Move "+c+" up", html:ICON.up, disabled:i===0, onclick:function(){ moveCat(c, i-1); }}),
       el("button",{class:"icon-btn", "aria-label":"Move "+c+" down", html:ICON.down, disabled:i===list.length-1, onclick:function(){ moveCat(c, i+1); }})
@@ -1617,7 +1615,7 @@ function renderSettings(top, view){
   view.appendChild(el("div",{class:"card"},[
     el("h3",{text:"Subject order"}),
     el("p",{text:"Set the order of the subjects across the top of Shows, so the ones you use most sit next to All. "+(S.catOrder && S.catOrder.length ? "Your own order is in use." : "Right now they're A to Z.")}),
-    el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Change subject order", onclick:function(){ go({tab:"home", order:true, from:"settings"}); }}) ])
+    el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Change subject order", onclick:function(){ go({tab:"settings", order:true}); }}) ])
   ]));
   view.appendChild(wordsCard());
   var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
