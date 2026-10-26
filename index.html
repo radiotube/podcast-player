@@ -1235,6 +1235,7 @@ function fillDetails(box, e, sh, close){
 /* In the details of an episode with no transcript of its own: one the app made, the one being made, or a button to make one. */
 function makeRow(e, sh){
   var row = el("div",{class:"mk-row"}), sid = sh && sh.id || e.s;
+  var part = null;
   var draw = function(o){
     row.innerHTML = "";
     var J = MK && MK.g===e.g ? MK : null;
@@ -1247,11 +1248,14 @@ function makeRow(e, sh){
     if(o || (J && J.st==="done" && J.segs.length)){ row.appendChild(el("span",{text:"Transcript: made by this app. Play the episode, then tap Transcript in the player."})); return; }
     if(!mkOn()){ row.hidden = true; return; }
     row.hidden = false;
-    row.appendChild(el("span",{text:"No transcript from the show. The app can make one on this device. It takes a while and works only while the app is on screen."}));
-    row.appendChild(el("button",{class:"pill-btn", text:"Make a transcript", onclick:function(){ mkStart(Object.assign({s:sid}, e), sh); draw(null); }}));
+    row.appendChild(el("span",{text: part ? "No transcript from the show. The app made part of one and stopped at "+fmt(part)+"." : "No transcript from the show. The app can make one on this device. It takes a while and works only while the app is on screen."}));
+    row.appendChild(el("button",{class:"pill-btn", text: part ? "Continue" : "Make a transcript", onclick:function(){ mkStart(Object.assign({s:sid}, e), sh); draw(null); }}));
   };
   row.hidden = true;
-  mkFind(sid, e.g).then(function(o){ row.hidden = false; draw(o); });
+  mkFind(sid, e.g).then(function(o){
+    if(o) return o;
+    return mkKey(sid, e.g).then(function(k){ return mkGetLocal("txp", k); }).then(function(p){ if(p && p.h && p.cum) part = p.cum/p.h.sr; return null; }, function(){ return null; });
+  }).then(function(o){ row.hidden = false; draw(o); });
   mkRows.push({row:row, fn:function(){ draw(MK && MK.g===e.g && mkMade[MK.key] ? mkMade[MK.key] : null); }});
   return row;
 }
@@ -2796,7 +2800,7 @@ function mkText(J){
   if(!J) return "";
   if(J.st==="start") return "Getting the episode ready…";
   if(J.st==="model" && !J.dead){
-    if(J.dl && J.dl.total) return "Downloading the speech model, "+Math.round(J.dl.loaded/1048576)+" of "+Math.round(J.dl.total/1048576)+" MB (first time only)…";
+    if(J.dl && J.dl.total) return "Loading the speech model, "+Math.round(J.dl.loaded/1048576)+" of "+Math.round(J.dl.total/1048576)+" MB (it downloads only the first time)…";
     return J.resumed && J.segs.length ? "Picking up where it stopped…" : "Loading the speech model…";
   }
   if(J.st==="run"){
