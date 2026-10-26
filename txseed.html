@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>tx seed</title><body><pre id=o>working…</pre><script>
+(async function(){
+  var o = document.getElementById("o"), out = [];
+  try{
+    var S = JSON.parse(localStorage.getItem("pp.v1")||"null");
+    if(!S){ o.textContent = "no app state yet; open the app first"; return; }
+    var ids = Object.keys(S.subs), sid = null;
+    for(var i=0;i<ids.length;i++){ var c = S.cache[ids[i]]; if(c && c.eps && c.eps.length >= 4){ sid = ids[i]; break; } }
+    if(!sid){ o.textContent = "no show with a loaded list"; return; }
+    var eps = S.cache[sid].eps.slice().sort(function(a,b){ return new Date(b.d)-new Date(a.d); });
+    var texts = ["Today we cover the zebra migration. The zebra herd moved, and every zebra was counted.", "One zebra showed up, then another zebra.", "We met a giraffe at the zoo.", "Plain talk with nothing to match, but the zebra zebra zebra and a giraffe too."];
+    var cache = await caches.open("pp-tx"), base = location.origin + location.pathname.replace(/[^\/]*$/,"");
+    for(var j=0;j<4;j++){
+      var e = eps[j];
+      var b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(sid)+"|"+String(e.g)));
+      var key = Array.prototype.map.call(new Uint8Array(b).slice(0,12), function(x){ return (x<16?"0":"")+x.toString(16); }).join("");
+      var obj = {v:1, g:e.g, sid:sid, t:e.t, show:S.subs[sid].title, made:new Date().toISOString(), by:"test", dur:60, segs:[[0,30,texts[j]]], src:"", size:0, up:true};
+      await cache.put(new Request(base+"__tx/"+key+".json"), new Response(JSON.stringify(obj), {headers:{"Content-Type":"application/json"}}));
+      out.push((j+1)+". "+e.t+" -> "+texts[j]);
+    }
+    o.textContent = "Show: "+S.subs[sid].title+"\n"+out.join("\n");
+  }catch(err){ o.textContent = "error "+err; }
+})();
+</script>
