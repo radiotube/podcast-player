@@ -7,17 +7,9 @@ env.allowLocalModels = false;
 try { env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
 
 const MODEL = "onnx-community/whisper-tiny.en";
-const MODEL_W = "onnx-community/whisper-tiny.en_timestamped";
-let asr = null, asrW = null;
+let asr = null;
 const files = {};
 
-function loadW() {
-  if (!asrW) {
-    asrW = pipeline("automatic-speech-recognition", MODEL_W, { dtype: "q8", device: "wasm" });
-    asrW.catch(() => { asrW = null; });
-  }
-  return asrW;
-}
 function load() {
   if (!asr) {
     asr = pipeline("automatic-speech-recognition", MODEL, {
@@ -44,9 +36,9 @@ onmessage = async (ev) => {
       await load();
       postMessage({ type: "ready" });
     } else if (m.type === "run") {
-      const run = m.word ? await loadW() : await load();
+      const run = await load();
       const t0 = performance.now();
-      const out = await run(m.audio, { return_timestamps: m.word ? "word" : true });
+      const out = await run(m.audio, { return_timestamps: true });
       const lines = (out.chunks || []).map((c) => ({
         s: c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : null,
         e: c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : null,

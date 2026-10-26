@@ -372,7 +372,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[]};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[]};}
 var S = load();
 function load(){
   var s = null, raw = null;
@@ -1886,7 +1886,8 @@ function playEp(e, autoplay, q, stayClosed){
   media = useVideo ? video : audio;
   if(useVideo) video.poster = cur.a || "";
   showVideo(useVideo);
-  media.src = e.u; media.playbackRate = S.speed||1; media.defaultPlaybackRate = S.speed||1;
+  curSrc = useVideo ? "" : mkSrcOf(e.g);
+  media.src = curSrc || e.u; media.playbackRate = S.speed||1; media.defaultPlaybackRate = S.speed||1;
   var intro = showObj.skipStart||0;
   media.addEventListener("loadedmetadata", function once(){
     media.removeEventListener("loadedmetadata", once);
@@ -2026,7 +2027,11 @@ function finishEpisode(){
   m.addEventListener("durationchange", function(){ if(m===media){ onTime(); updatePositionState(); } });
   m.addEventListener("seeked", function(){ if(m===media){ if(progSeek) progSeek = false; else { posDirty = true; wantAt = 0; hold.user = true; } updatePositionState(); var d = dur(); if(d && media.currentTime < d - ((showOf(cur&&cur.s).skipEnd)||0) - 1) endSkipped = false; } });
   m.addEventListener("ended", function(){ if(m===media && !endSkipped) finishEpisode(); });
-  m.addEventListener("error", function(){ if(m===media && m.getAttribute("src")) toast("This episode wouldn't play. The show's server may be down."); });
+  m.addEventListener("error", function(){
+    if(m!==media || !m.getAttribute("src")) return;
+    if(cur && curSrc && m.getAttribute("src")===curSrc){ mkSrcGone(); return; }
+    toast("This episode wouldn't play. The show's server may be down.");
+  });
 });
 document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="hidden") savePos(true); });
 window.addEventListener("pagehide", function(){ savePos(true); });
@@ -2074,7 +2079,7 @@ function trimStart(){
   needGenre(sh).then(function(){
     if(cur!==c) return;
     if(!sh || !trimWanted(sh)) return trimUI();
-    var u = String(c.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
+    var u = String((curSrc && cur && cur.g===c.g) ? curSrc : c.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
     TR = {g:c.g, sid:c.s, u:u, url:u, runs:[], cov:[], saved:0, st:"start", tries:0};
     trimUI(); trimPump();
   });
@@ -2277,10 +2282,10 @@ function updatePositionState(){
 }
 
 /* ---------- Transcripts (Podcasting 2.0 podcast:transcript) ---------- */
-var cues = [], cueEls = [], cueIdx = -1, txFor = "", txKind = "";
+var cues = [], cueEls = [], cueIdx = -1, txFor = "", txKind = "", txMade = null;
 /* Every word on screen, in order: {s, e, el, c (its line in cues), real (the show timed this word itself), li (screen row)} */
 var words = [], rows = null, wordIdx = -1, follow = true;
-function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; txKind = ""; setTimeout(mkUI, 0); words = []; rows = null; wordIdx = -1; setFollow(true); var box = $("txBox"); box.innerHTML = ""; box.style.removeProperty("--txpad"); $("txSize").hidden = true; }
+function resetTranscript(){ cues = []; cueEls = []; cueIdx = -1; txFor = ""; txKind = ""; txMade = null; setTimeout(mkUI, 0); words = []; rows = null; wordIdx = -1; setFollow(true); var box = $("txBox"); box.innerHTML = ""; box.style.removeProperty("--txpad"); $("txSize").hidden = true; }
 function txBig(){ return S.txBig !== false; }
 function txLayout(){ var p = $("player"); p.classList.toggle("txbig", txBig()); $("txSize").textContent = txBig() ? "Smaller view" : "Bigger view"; rows = null; txKick(); }
 $("txBtn").onclick = function(){
@@ -2334,7 +2339,11 @@ function madeTranscript(c, msg){
   txMsg("Looking for a transcript…");
   mkFind(c.s, c.g).then(function(o){
     if(!cur || cur.g!==c.g || txFor!==c.g) return;
-    if(o && o.segs && o.segs.length){ txKind = "made"; cues = segCues(o.segs); drawTranscript("Made by this app with speech recognition, so it may have mistakes."); mkUI(); return; }
+    if(o && o.segs && o.segs.length){
+      txKind = "made"; txMade = o; cues = segCues(o.segs);
+      if(o.src) mkUseSrc(c.g, o.src);
+      drawTranscript("Made by this app with speech recognition, so it may have mistakes."); mkUI(); return;
+    }
     txKind = "none";
     txMsg(msg + (mkOn() || c.v ? "" : " You can also have the app make one: turn on Make transcripts in Settings."));
     mkUI();
@@ -2527,9 +2536,45 @@ var MK_MSG = {
   model:"Couldn't load the speech model.",
   big:"This show's server only sends the whole file at once, and this episode is too big to read that way.",
   decode:"This device couldn't read the sound in this episode's file.",
+  changed:"This show's server sent a different copy of the episode this time (it puts different ads in each one), so the part already made won't line up. Tap Make a transcript to start over.",
   failed:"Something went wrong while making the transcript."
 };
 function mkOn(){ return S.txMake === true; }
+/* Some hosts stitch different ads into each copy of an episode they send out, so two copies of one episode
+   can be seconds apart from the first ad on. A made transcript notes the copy it was read from (src), and the
+   player plays that same copy whenever one is known, so the words stay with the voices.
+   S.mkSrc[episode guid] = {src, at}, kept on this device only. curSrc is the copy playing now, if it's one of these. */
+var curSrc = "";
+function mkSrcOf(g){ var m = (S.mkSrc||{})[g]; return m && m.src || ""; }
+function mkKeepSrc(g, src){
+  if(!g || !src) return; S.mkSrc = S.mkSrc||{};
+  if(S.mkSrc[g] && S.mkSrc[g].src===src) return;
+  S.mkSrc[g] = {src:src, at:Date.now()};
+  var ks = Object.keys(S.mkSrc);
+  if(ks.length > 300) ks.sort(function(a,b){ return S.mkSrc[a].at - S.mkSrc[b].at; }).slice(0, ks.length-300).forEach(function(k){ delete S.mkSrc[k]; });
+  save(false, true);
+}
+/* Moves the player onto the copy the transcript was made from, at the same spot. */
+function mkUseSrc(g, src){
+  if(!src) return; mkKeepSrc(g, src);
+  if(!cur || cur.g!==g || curSrc===src || media===video) return;
+  var t = media.currentTime||0, playing = !media.paused && !media.ended;
+  curSrc = src; media.src = src;
+  if(t > 1){ wantAt = t; media.addEventListener("loadedmetadata", function once(){ media.removeEventListener("loadedmetadata", once); progSeek = true; try{ media.currentTime = t; }catch(x){ progSeek = false; } }); }
+  if(playing){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); }
+  trimStart();
+}
+/* That copy is gone from the host: go back to the show's own address. */
+function mkSrcGone(){
+  if(!cur) return;
+  delete S.mkSrc[cur.g]; save(false, true); curSrc = "";
+  var at = S.pos[cur.g]||0;
+  media.src = cur.u;
+  if(at > 5){ wantAt = at; media.addEventListener("loadedmetadata", function once(){ media.removeEventListener("loadedmetadata", once); progSeek = true; try{ media.currentTime = at; }catch(x){ progSeek = false; } }); }
+  var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); });
+  if(txKind==="made") toast("The copy of this episode the transcript was made from is gone, so the words may be a little off.");
+  trimStart();
+}
 /* What this device found when it last tried to read each show's audio: S.txRes[show id] = {st:"ok" or "blocked", t:time}.
    Kept on the device only, because a host can let one browser in and turn another away. A result older
    than two weeks is checked again when the show's page opens, since hosts change. */
@@ -2606,10 +2651,10 @@ function mkDbxGet(key){
   }).catch(function(){ return null; });
 }
 /* Added once. If another device already put this episode's transcript there, that copy stays. */
-function mkDbxPut(key, o){
+function mkDbxPut(key, o, again){
   if(!dbx) return Promise.resolve(false);
-  var arg = {path:mkPath(key), mode:{".tag":"add"}, autorename:false, mute:true, strict_conflict:true};
-  var body = JSON.stringify({v:o.v, g:o.g, sid:o.sid, t:o.t, show:o.show, made:o.made, by:o.by, dur:o.dur, segs:o.segs});
+  var arg = {path:mkPath(key), mode:{".tag": again ? "overwrite" : "add"}, autorename:false, mute:true, strict_conflict:!again};
+  var body = JSON.stringify({v:o.v, g:o.g, sid:o.sid, t:o.t, show:o.show, made:o.made, by:o.by, dur:o.dur, segs:o.segs, src:o.src||"", size:o.size||0});
   return dbxCall("https://content.dropboxapi.com/2/files/upload", {"Dropbox-API-Arg":JSON.stringify(arg)}, body).then(function(r){
     if(r.ok) return true;
     return dbxJson(r).then(function(j){ if(r.status===409 && /conflict/.test(j.error_summary||"")) return true; return false; });
@@ -2692,7 +2737,8 @@ function mkBytes(start, len){
     if(r.status===416){ clearTimeout(to); return new Uint8Array(0); }
     if(r.status!==206 && r.status!==200){ clearTimeout(to); var e = new Error("http "+r.status); e.http = r.status; throw e; }
     if(r.url) J.url = r.url;
-    var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||""); if(m) J.size = +m[1];
+    var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||"");
+    if(m){ if(J.size && (J.got || J.resumed) && +m[1]!==J.size){ ctl.abort(); clearTimeout(to); throw new Error("changed"); } J.size = +m[1]; }
     if(r.status===200 && +(r.headers.get("content-length")||0) > MK_MAX){ ctl.abort(); clearTimeout(to); throw new Error("big"); }
     return r.arrayBuffer().then(function(ab){
       clearTimeout(to); J.got = true; if(!J.okd){ J.okd = true; txNote(J.sid, "ok"); }
@@ -2799,6 +2845,7 @@ function mkStep(){
     J.busy = false; mkWake(false);
     var msg = String(e && e.message || e);
     if(msg==="format") J.st = "format";
+    else if(msg==="changed"){ J.st = "changed"; mkDelLocal("txp", J.key); }
     else if(msg==="stopped") return;
     else if(e && e.model){ J.st = "model"; J.err = msg.replace(/^model:\s*/,""); }
     else if(e && e.run){ J.st = "failed"; J.err = msg; }
@@ -2816,34 +2863,39 @@ function mkResumePoint(){
 }
 function mkSavePart(){
   var J = MK, p = mkResumePoint(); if(!p || !J.key) return;
-  mkPutLocal("txp", J.key, {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, u:J.u0, off:p.off, cum:p.cum, h:J.h, bufT:J.bufT, segs:J.segs, size:J.size||0, at:Date.now()});
+  mkPutLocal("txp", J.key, {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, u:J.u0, src:J.url, off:p.off, cum:p.cum, h:J.h, bufT:J.bufT, segs:J.segs, size:J.size||0, at:Date.now()});
 }
 function mkFinish(){
   var J = MK; if(!J || J.dead) return;
   J.dead = true; J.busy = false; mkEnd(); mkWake(false);
-  var o = {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, made:new Date().toISOString(), by:"whisper-tiny.en", dur:Math.round(J.bufT), segs:J.segs, up:false};
+  var o = {v:1, g:J.g, sid:J.sid, t:J.t, show:J.show, made:new Date().toISOString(), by:"whisper-tiny.en", dur:Math.round(J.bufT), segs:J.segs, src:J.url, size:J.size||0, up:false};
   J.st = "done"; J.made = o; mkMade[J.key] = o; delete mkMiss[J.key];
+  if(cur && cur.g===J.g && txKind==="made") txMade = o;
+  mkUseSrc(J.g, J.url);
   mkPutLocal("tx", J.key, o).then(function(){ return mkDelLocal("txp", J.key); }).then(function(){
-    return mkDbxPut(J.key, o).then(function(ok){ if(ok){ o.up = true; mkPutLocal("tx", J.key, o); } J.up = ok; mkUI(); });
+    return mkDbxPut(J.key, o, J.again).then(function(ok){ if(ok){ o.up = true; mkPutLocal("tx", J.key, o); } J.up = ok; mkUI(); });
   });
   toast(J.segs.length ? "Transcript ready: "+J.t : "Finished, but no speech was found in "+J.t);
   mkUI(); mkShowLive(true);
 }
 /* Start (or continue) making a transcript for an episode. */
-function mkStart(e, sh){
+function mkStart(e, sh, again){
   if(MK && !MK.dead){ if(MK.g===e.g){ if(MK.st==="net"){ MK.st = "run"; MK.retry = 0; mkStep(); } return; } toast("Already making one for "+MK.t+". Stop it first."); return; }
   var sid = (sh && sh.id) || e.s, u = String(e.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
-  var J = MK = {g:e.g, sid:sid, t:e.t||"", show:(sh && sh.title) || showOf(sid).title || "", u0:u, url:u, len:e.len||0, st:"start", segs:[], buf:new Float32Array(0), bufT:0, skipTo:0, sl:[], ms:0, heard:0, started:Date.now()};
+  // Read the copy the player is on, when it's one an earlier transcript was made from.
+  var from = (cur && cur.g===e.g && curSrc) || mkSrcOf(e.g) || u;
+  var J = MK = {g:e.g, sid:sid, t:e.t||"", show:(sh && sh.title) || showOf(sid).title || "", u0:u, url:from, again:!!again, len:e.len||0, st:"start", segs:[], buf:new Float32Array(0), bufT:0, skipTo:0, sl:[], ms:0, heard:0, started:Date.now()};
   if(e.v || isVideo(e.ty, e.u)){ J.st = "video"; J.dead = true; mkUI(); return; }
   mkUI();
   mkKey(sid, e.g).then(function(key){ J.key = key; return mkGetLocal("txp", key); }).then(function(p){
     if(J.dead) return;
-    if(p && p.h && p.u===J.u0){ J.h = p.h; J.off = p.off; J.cum = p.cum; J.bufT = p.cum/p.h.sr; J.skipTo = p.bufT; J.segs = p.segs||[]; J.size = p.size||0; J.resumed = true; return; }
+    if(p && p.h && p.u===J.u0){ J.h = p.h; J.off = p.off; J.cum = p.cum; J.bufT = p.cum/p.h.sr; J.skipTo = p.bufT; J.segs = p.segs||[]; J.size = p.size||0; if(p.src) J.url = p.src; J.resumed = true; return; }
     return mkHead();
-  }).then(function(){ if(!J.dead){ J.st = J.st==="start" ? "model" : J.st; mkUI(); mkStep(); } }).catch(function(err){
+  }).then(function(){ if(!J.dead){ mkUseSrc(J.g, J.url); J.st = J.st==="start" ? "model" : J.st; mkUI(); mkStep(); } }).catch(function(err){
     if(J.dead) return;
     var em = String(err && err.message);
-    J.st = em==="format" || em==="big" ? em : (J.got ? "failed" : "blocked"); if(J.st==="blocked" && err && err.name==="TypeError") txNote(J.sid, "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
+    if(em==="changed") mkDelLocal("txp", J.key);
+    J.st = em==="format" || em==="big" || em==="changed" ? em : (J.got ? "failed" : "blocked"); if(J.st==="blocked" && err && err.name==="TypeError") txNote(J.sid, "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
   });
 }
 function mkStop(){
@@ -2894,6 +2946,10 @@ function mkUI(){
     if(live) bar.appendChild(el("button",{class:"pill-btn", text:"Stop", onclick:mkStop}));
     else if(J.st==="stopped" || J.st==="net") bar.appendChild(el("button",{class:"pill-btn", text:"Continue", onclick:function(){ if(MK.st==="net" && !MK.dead) { MK.st = "run"; MK.retry = 0; mkStep(); } else { MK = null; mkStart(c, showOf(c.s)); } }}));
     bar.hidden = J.st==="done" && J.up!==false;
+  } else if(c && txFor===c.g && txKind==="made" && txMade && txMade.g===c.g && !txMade.src && mkOn() && !c.v){
+    bar.appendChild(el("span",{class:"mk-t", text:"This transcript was made before the app kept track of which copy of the episode it read. Some shows put different ads in each copy, so if the words run behind or ahead of the voices, make it again and they'll line up."}));
+    bar.appendChild(el("button",{class:"pill-btn", text:"Make again", onclick:function(){ mkStart(c, showOf(c.s), true); }}));
+    bar.hidden = false;
   } else if(c && txFor===c.g && txKind==="none" && mkOn() && !c.v && txBlocked(c.s)){
     bar.appendChild(el("span",{class:"mk-t", text:"This show's host won't let the app read its audio on this device, so the app can't make a transcript for it."}));
     bar.appendChild(el("button",{class:"pill-btn", text:"Try anyway", onclick:function(){ mkStart(c, showOf(c.s)); mkShowLive(); }}));
