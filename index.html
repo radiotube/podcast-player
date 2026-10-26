@@ -1722,7 +1722,7 @@ function renderSettings(top, view){
     el("h3",{text:"About this app"}),
     el("p",{text:"Following "+n+" show"+(n===1?"":"s")+", "+S.fav.length+" favorite"+(S.fav.length===1?"":"s")+"."}),
     el("p",{text:"Audio keeps playing with the screen locked and shows lock screen controls. Video plays in the app or in Picture in Picture; iOS pauses video when you leave the app without Picture in Picture. Episodes stream; there is no download for offline listening."}),
-    el("p",{text:"Transcripts appear when a show publishes one. Ad skipping covers ads a show marks in its chapters and the start and end amounts you set; ads read in the middle of a show can't be detected."})
+    el("p",{text:"Transcripts appear when a show publishes one, and the app can make one itself if you turn on Make transcripts. Ad skipping covers ads a show marks in its chapters and the start and end amounts you set; ads read in the middle of a show can't be detected."})
   ]));
 }
 function wordsCard(){
@@ -2695,7 +2695,8 @@ function mkStep(){
     if(J.st!=="run"){ J.st = "model"; mkUI(); }
     return mkRun(win).catch(function(e){ if(!J.heard){ e.model = true; } else e.run = true; throw e; }).then(function(m){
       if(J.dead) return;
-      J.st = "run"; J.dl = null; J.ms += m.ms||0; J.heard += sec;
+      if(J.st!=="run"){ J.st = "run"; J.runT0 = Date.now(); J.runB0 = J.bufT; }
+      J.dl = null; J.ms += m.ms||0; J.heard += sec;
       var lines = (m.lines||[]).filter(function(l){ return l.b && l.s!=null && l.s < sec; }), cut = sec;
       if(!last && lines.length){
         var tail = lines[lines.length-1];
@@ -2792,7 +2793,8 @@ function mkText(J){
   if(J.st==="run"){
     var tot = mkTotal(J), pct = tot ? Math.min(99, Math.floor(J.bufT/tot*100)) : 0;
     var t = "Making transcript: "+fmt(J.bufT)+(tot ? " of "+fmt(tot)+" ("+pct+"%)" : "");
-    if(J.heard > 60 && J.ms && tot){ var per = (J.ms/1000)/J.heard, left = Math.max(0, (tot - J.bufT)*per*1.1); t += ", about "+fmtDur(Math.max(60, left))+" to go"; }
+    var done = J.bufT - (J.runB0||0);
+    if(done > 90 && J.runT0 && tot){ var per = (Date.now() - J.runT0)/1000/done, left = Math.max(0, (tot - J.bufT)*per); t += ", about "+fmtDur(Math.max(60, left))+" to go"; }
     return t + (J.wait ? ". Paused while the app was off screen" : "");
   }
   if(J.st==="done") return J.segs.length ? "Transcript made"+(J.up===false ? ". It's saved on this device and goes to Dropbox once you're signed in." : ".") : "Finished, but no speech was found.";
@@ -2811,7 +2813,7 @@ function mkUI(){
     else if(J.st==="stopped" || J.st==="net") bar.appendChild(el("button",{class:"pill-btn", text:"Continue", onclick:function(){ if(MK.st==="net" && !MK.dead) { MK.st = "run"; MK.retry = 0; mkStep(); } else { MK = null; mkStart(c, showOf(c.s)); } }}));
     bar.hidden = J.st==="done" && J.up!==false;
   } else if(c && txFor===c.g && txKind==="none" && mkOn() && !c.v){
-    bar.appendChild(el("span",{class:"mk-t", text:"The app can make a transcript for this episode on this phone. It takes a while and works only while the app is on screen."}));
+    bar.appendChild(el("span",{class:"mk-t", text:"The app can make a transcript for this episode on this device. It takes a while and works only while the app is on screen."}));
     bar.appendChild(el("button",{class:"pill-btn", text:"Make a transcript", onclick:function(){ mkStart(c, showOf(c.s)); mkShowLive(); }}));
     bar.hidden = false;
   } else bar.hidden = true;
