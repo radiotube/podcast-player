@@ -866,7 +866,8 @@ function drawEps(wrap, allEps, sh, count, keepScroll, older){
   var n = eps.filter(function(e){return e.v;}).length;
   var info = el("div",{class:"ep-info"});
   if(tab==="recent"){
-    info.appendChild(el("p",{class:"note", text:eps.length+" recent episode"+(eps.length===1?"":"s")+(n? " · "+n+" video":"")+" · "+fresh.length+" new to you"+(hiddenOld ? " · newest "+epCap()+" shown, as set in Settings" : older && epCap() ? " · older ones shown for now" : "")}));
+    var extra = hiddenOld ? eps.length - epCap() : 0;
+    info.appendChild(el("p",{class:"note", text:(hiddenOld ? "Newest "+epCap()+" episodes"+(extra>0 ? ", plus "+extra+" older one"+(extra===1?"":"s")+" you're partway through or chose to hear again" : "")+". Your limit is in Settings." : eps.length+" recent episodes")+(n? " · "+n+" video":"")+" · "+fresh.length+" new to you"}));
   } else if(list.length){
     info.appendChild(el("p",{class:"note", text:list.length+" episode"+(list.length===1?"":"s")+" you haven't finished. Played ones are left out."}));
     var armed = false;
@@ -889,6 +890,7 @@ function drawEps(wrap, allEps, sh, count, keepScroll, older){
   function addEps(k){ list.slice(shown, shown+k).forEach(function(e){ ul.appendChild(epRow(e, sh, tab, function(){ redraw(); })); }); shown += k; more.hidden = shown >= list.length; }
   wrap.appendChild(more); addEps(Math.max(20, count||0));
   if(hiddenOld) wrap.appendChild(el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show "+hiddenOld+" older episode"+(hiddenOld===1?"":"s"), onclick:function(){ redraw(shown, true); }}));
+  else if(older && capEps(allEps).length < allEps.length) wrap.appendChild(el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show only the newest "+epCap()+" again", onclick:function(){ redraw(20, false); }}));
   if(keepScroll) $("scroller").scrollTop = st;
 }
 function showSettings(sh){
