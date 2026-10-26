@@ -239,6 +239,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .mk-bar .mk-t{flex:1 1 180px}
 .mk-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 10px;font-size:14px;color:var(--muted)}
 .mk-row span{flex:1 1 180px}
+.mk-auto .btn-row[hidden]{display:none}
 .mk-auto{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}
 
 /* Episode tabs, sort and listened marks */
@@ -3094,9 +3095,9 @@ function mkAutoText(){
 }
 var mkAutoEls = null;
 function mkAutoShow(){
-  if(!mkAutoEls || !mkAutoEls.st.isConnected){ mkAutoEls = null; return; }
+  if(!mkAutoEls) return;
   mkAutoEls.st.textContent = mkAutoText();
-  mkAutoEls.pause.hidden = !mkAutoMode();
+  mkAutoEls.row.hidden = !mkAutoMode();
   mkAutoEls.pause.textContent = S.mkAutoPaused ? "Resume" : "Pause";
 }
 mkRows.push({row:{get isConnected(){ return true; }}, fn:mkAutoShow});
@@ -3122,14 +3123,15 @@ function mkAutoCard(){
     else mkAutoSoon(500);
     mkAutoShow();
   }});
+  var row = el("div",{class:"btn-row"},[ pause ]);
   var box = el("div",{class:"mk-auto"},[
     el("h3",{text:"Make them ahead"}),
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkAutoSel"},[ "Make transcripts ahead for", sel ]) ]),
     el("p",{text:"While the app is open on screen, it lines up new episodes of these shows that you haven't played and that have no transcript yet, and makes them one at a time, newest first. Each one goes to your Dropbox, so it's ready on your other devices when you listen. It looks for new episodes every half hour, and takes at most the newest "+(epCap()||5)+" of each show (your Past episodes per show setting). Shows whose host won't let the app read the audio are left out."}),
     el("p",{text:"Best on a computer that's plugged in: leave the app open in its own browser window, as the front tab, and not minimized. It waits whenever the app is off screen. This choice is kept on this device only."}),
-    st, el("div",{class:"btn-row"},[ pause ])
+    st, row
   ]);
-  mkAutoEls = {st:st, pause:pause}; mkAutoShow();
+  mkAutoEls = {st:st, pause:pause, row:row}; mkAutoShow();
   return box;
 }
 function makeCard(){
@@ -3139,7 +3141,7 @@ function makeCard(){
   var card = el("div",{class:"card"},[
     el("h3",{text:"Make transcripts"}),
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkSel"},[ "Make transcripts on this device", sel ]) ]),
-    el("p",{text:"When an episode has no transcript of its own, the app can make one with speech recognition that runs right on this device. It's free and nothing is sent to anyone. Each one is made only when you tap Make a transcript, in the player's Transcript view or in an episode's details."}),
+    el("p",{text:"When an episode has no transcript of its own, the app can make one with speech recognition that runs right on this device. It's free and nothing is sent to anyone. Each one is made when you tap Make a transcript, in the player's Transcript view or in an episode's details, or ahead of time for the shows you pick under Make them ahead."}),
     el("p",{text:"The first time, the app downloads a speech model of about "+MK_MODEL_MB+" MB and keeps it. Making a transcript works through the whole episode, so it takes a while and uses the battery hard. It only runs while the app is open on screen, so the screen stays on until it's done. If it stops, it can pick up where it left off. English only, and it will have some mistakes."}),
     el("p",{text:"It works on MP3 episodes from podcast hosts that let the app read the audio, the same ones that can trim long pauses. Shows whose host turns the app away are marked on their page, and the app checks them again every two weeks, since hosts change. Finished transcripts are saved in your Dropbox, so each episode is made once and shows on all your devices. Skip and highlight words still look only at titles and descriptions."}),
     el("p",{text:"This setting is kept on each device, so you can leave it off on the iPhone and on for the iPad or computer."})
