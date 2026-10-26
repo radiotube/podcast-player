@@ -359,7 +359,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[]};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}};}
 var S = load();
 function load(){
   var s = null;
@@ -370,6 +370,7 @@ function load(){
   s.fav = s.fav.filter(function(id){return s.subs[id];});
   normAll(s.subs);
   if(!Array.isArray(s.skipWords)) s.skipWords = []; if(!Array.isArray(s.hiWords)) s.hiWords = [];
+  if(!s.wordAt || typeof s.wordAt !== "object") s.wordAt = {};
   return s;
 }
 /* A show can sit under several subjects (cats). Copies from before that kept one subject in cat,
@@ -387,7 +388,7 @@ function normAll(subs){ Object.keys(subs||{}).forEach(function(id){ normCats(sub
 function catsOf(sh){ return (sh && Array.isArray(sh.cats)) ? sh.cats : []; }
 /* Played holds when it was marked: a positive time for played, a negative one for marked not played,
    so marking an episode not played on one device carries over to the others. */
-function isPlayed(g){ var v = S.played[g]; if(v===true || +v > 0) return true; if(+v < 0) return false; return !!skipBy(g); }
+function isPlayed(g){ var v = S.played[g]; if(v===true || +v > 0) return true; return !!skipBy(g); }
 function setPlayed(g, on){
   S.played[g] = on ? Date.now() : -Date.now();
   if(on){ delete S.pos[g]; S.posT[g] = Date.now(); }
@@ -396,13 +397,15 @@ function setPlayed(g, on){
    as played, so it leaves New to me and what plays next. One that mentions a highlight word stands out in
    the lists with the word under its title. Words match whole, in any capitals. A highlight beats a skip,
    and an episode you're partway through or have loaded in the player is never skipped. Nothing is written
-   to the played list, so taking a word off brings its episodes back, and whatever you marked yourself
-   (played, not played, Hear again) stands either way. */
+   to the played list, so taking a word off brings its episodes back. Marking a skipped episode not played
+   (or Hear again) keeps it; a not-played mark made before the word was added doesn't. */
 function wordKey(p){ return String(p||"").replace(/[\u2018\u2019\u02bc]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/\s+/g," ").trim().toLowerCase(); }
 var wordRxs = {};
 function wordRx(k){
   if(wordRxs[k]) return wordRxs[k];
   var body = k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/ /g,"\\s+"), rx;
+  // A plain plural or possessive counts too: "martial artist" also finds "martial artists".
+  if(/[a-z0-9]$/.test(k)) body += "(?:'s|s|es)?";
   try{ rx = new RegExp("(^|[^\\p{L}\\p{N}_])"+body+"(?=$|[^\\p{L}\\p{N}_])", "iu"); }
   catch(e){ rx = {test:function(t){ return t.indexOf(k) >= 0; }}; }
   return (wordRxs[k] = rx);
@@ -412,7 +415,14 @@ function firstHit(list, e, text){
   for(var i=0;i<(list||[]).length;i++){ var k = wordKey(list[i]); if(k && ((e.m && e.m.indexOf(k)>=0) || wordRx(k).test(text))) return list[i]; }
   return "";
 }
-function hitOf(e){ var text = wordKey((e.t||"")+" "+(e.x||"")), h = firstHit(S.hiWords, e, text); return {h:h, s: h ? "" : firstHit(S.skipWords, e, text)}; }
+function hitOf(e){
+  var text = wordKey((e.t||"")+" "+(e.x||"")), h = firstHit(S.hiWords, e, text), r = {h:h, s:"", sAt:0};
+  if(!h) S.skipWords.forEach(function(w){ var k = wordKey(w); if(k && ((e.m && e.m.indexOf(k)>=0) || wordRx(k).test(text))){ if(!r.s) r.s = w; r.sAt = Math.max(r.sAt, wordAdded(k)); } });
+  return r;
+}
+// When a word went on a list. Words from before this was kept count from when skip words first shipped.
+var WORDS_SHIPPED = Date.UTC(2026, 9, 26, 2, 0);
+function wordAdded(k){ return +(S.wordAt && S.wordAt[k]) || WORDS_SHIPPED; }
 // When a show's list arrives, the full notes are checked too (the saved copy keeps only the start of them).
 function fullHits(e){
   var n = NOTES[e.g], text = (e.t||"")+" "+(e.x||"");
@@ -434,10 +444,11 @@ function skipBy(g){
   if(!S.skipWords || !S.skipWords.length) return "";
   var r = hitMap()[g]; if(!r || !r.s) return "";
   if((cur && cur.g===g) || (S.pos[g]||0) > 5) return "";
+  var v = +S.played[g]; if(v < 0 && -v >= r.sAt) return "";
   return r.s;
 }
 // Played only because of a skip word (nothing marked by hand).
-function skipWhy(g){ var v = S.played[g]; return (v===true || +v > 0 || +v < 0) ? "" : skipBy(g); }
+function skipWhy(g){ var v = S.played[g]; return (v===true || +v > 0) ? "" : skipBy(g); }
 function hiOf(e){ if(!S.hiWords || !S.hiWords.length) return ""; return (hitMap()[e.g] || hitOf(e)).h; }
 var saveT = null;
 function save(now, quiet){
@@ -1655,11 +1666,11 @@ function wordsCard(){
       inp.value.split(",").forEach(function(p){
         p = p.replace(/\s+/g," ").trim().slice(0,80); var k = wordKey(p); if(!k) return;
         if(S[key].some(function(w){ return wordKey(w)===k; }) || S[key].length >= 200) return;
-        S[key].push(p); added++;
+        S[key].push(p); added++; S.wordAt[k] = Date.now();
         if(other.some(function(w){ return wordKey(w)===k; })) both.push(p);
       });
       inp.value = "";
-      if(added) changed();
+      if(added){ changed(); recheckLists(); }
       if(both.length) toast("\u201c"+both[0]+"\u201d is on both lists, so it highlights and doesn't skip");
     }
     inp.addEventListener("keydown", function(ev){ if(ev.key==="Enter"){ ev.preventDefault(); add(); } });
@@ -1674,13 +1685,23 @@ function wordsCard(){
   var card = el("div",{class:"card"},[
     el("h3",{text:"Skip and highlight words"}),
     el("p",{text:"Both lists look for whole words or phrases in an episode's title and description, in any capitals. To add several at once, separate them with commas."}),
-    editor("skipWords", "skipWordIn", "Skip episodes that mention", "A match counts as played. It leaves New to me and what plays next, and shows as Skipped, with the word, under Recent. Hear again or the check mark brings it back. An episode you're partway through, or the one in the player, is never skipped."),
+    editor("skipWords", "skipWordIn", "Skip episodes that mention", "A match counts as played. It leaves New to me and what plays next, and shows as Skipped, with the word, under Recent. Hear again or the check mark brings it back. An episode you're partway through, or the one in the player, is never skipped. Plurals count, so \u201cmartial artist\u201d also catches \u201cmartial artists\u201d."),
     editor("hiWords", "hiWordIn", "Highlight episodes that mention", "A match stands out in the episode lists, with the word under its title. An episode that matches both lists is highlighted and not skipped."),
     el("p",{text:"Taking a word off brings back the episodes it skipped, unless you played them yourself. Both lists sync through Dropbox."}),
     status
   ]);
   count();
   return card;
+}
+/* After a word is added, shows whose saved list has lost its descriptions (the browser's storage ran
+   short) are loaded again, so the new word is checked against the full notes. */
+function recheckLists(){
+  Object.keys(S.subs).forEach(function(id){
+    var c = S.cache[id];
+    var bare = !c || !c.eps || !c.eps.some(function(e){ return e.x; });
+    if(bare && !inflight[id] && catQueue.indexOf(id) < 0) catQueue.push(id);
+  });
+  pumpCat();
 }
 function importOpml(f, status){
   status.className = "status"; status.textContent = "Reading file…";
@@ -1720,7 +1741,7 @@ function matchFeed(f){
   });
 }
 function backup(){
-  var data = {app:"podcast-player", v:1, at:new Date().toISOString(), subs:S.subs, fav:S.fav, pos:S.pos, played:S.played, speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, skipWords:S.skipWords, hiWords:S.hiWords};
+  var data = {app:"podcast-player", v:1, at:new Date().toISOString(), subs:S.subs, fav:S.fav, pos:S.pos, played:S.played, speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, skipWords:S.skipWords, hiWords:S.hiWords, wordAt:S.wordAt};
   var blob = new Blob([JSON.stringify(data)], {type:"application/json"});
   var name = "podcast-player-backup-"+new Date().toISOString().slice(0,10)+".json";
   var f = null; try{ f = new File([blob], name, {type:"application/json"}); }catch(e){}
@@ -1733,7 +1754,7 @@ function restore(f){
     S.subs = d.subs||{}; normAll(S.subs); Object.keys(S.subs).forEach(function(id){ if(S.unf[id]) S.subs[id].fT = Date.now(); }); S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
     S.posT = {}; Object.keys(S.pos).forEach(function(g){ if(!/#len$/.test(g)) S.posT[g] = Date.now(); });
     if(d.skipBack) S.skipBack = d.skipBack; if(d.skipFwd) S.skipFwd = d.skipFwd; if(typeof d.adSkip==="boolean") S.adSkip = d.adSkip; S.cache = {};
-    if(Array.isArray(d.skipWords)) S.skipWords = d.skipWords; if(Array.isArray(d.hiWords)) S.hiWords = d.hiWords; wordsChanged();
+    if(Array.isArray(d.skipWords)) S.skipWords = d.skipWords; if(Array.isArray(d.hiWords)) S.hiWords = d.hiWords; if(d.wordAt && typeof d.wordAt==="object") S.wordAt = d.wordAt; wordsChanged();
     save(true); applySkipLabels(); toast("Backup restored"); go({tab:"home"});
   }).catch(function(){ toast("That isn't a Podcast Player backup file"); });
 }
@@ -2535,7 +2556,7 @@ function dbxUpload(data, rev, keepalive){
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
   return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
-    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext, epCap:S.epCap, skipWords:S.skipWords, hiWords:S.hiWords}};
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext, epCap:S.epCap, skipWords:S.skipWords, hiWords:S.hiWords, wordAt:S.wordAt}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
 function stable(v){
@@ -2603,7 +2624,7 @@ function mergeSync(base, local, remote, fresh){
   [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords","wordAt"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
@@ -2616,12 +2637,12 @@ function isFresh(){
 function applyMerged(m){
   var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg, keep:S.keep});
   var lt = cur ? (S.posT[cur.g]||0) : 0;
-  var prefsBefore = stable(snap().prefs), wordsBefore = stable([S.skipWords, S.hiWords]);
+  var prefsBefore = stable(snap().prefs), wordsBefore = stable([S.skipWords, S.hiWords, S.wordAt]);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
   normAll(S.subs);
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
-  if(!Array.isArray(S.skipWords)) S.skipWords = []; if(!Array.isArray(S.hiWords)) S.hiWords = [];
-  var wordsMoved = stable([S.skipWords, S.hiWords])!==wordsBefore; if(wordsMoved) wordsChanged();
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords","wordAt"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  if(!Array.isArray(S.skipWords)) S.skipWords = []; if(!Array.isArray(S.hiWords)) S.hiWords = []; if(!S.wordAt || typeof S.wordAt!=="object") S.wordAt = {};
+  var wordsMoved = stable([S.skipWords, S.hiWords, S.wordAt])!==wordsBefore; if(wordsMoved) wordsChanged();
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
   if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){
