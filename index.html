@@ -246,6 +246,17 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .mark.on{color:var(--good)}
 .badge.new{background:var(--accent);color:var(--accent-ink)}
 .badge.heard{background:var(--surface-2);color:var(--muted)}
+.badge.skip{background:var(--surface-2);color:var(--muted);text-transform:none;letter-spacing:0;font-size:12px;max-width:min(240px,100%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ep.hi{background:rgba(242,169,59,.08);box-shadow:inset 3px 0 0 var(--accent);border-radius:10px;padding-left:12px;padding-right:8px}
+.ep .hit{font-size:13px;font-weight:600;color:var(--accent);margin-top:3px;overflow-wrap:anywhere}
+.word-add{display:flex;gap:8px;align-items:center}
+.word-add input{flex:1;min-width:0}
+.word-add .btn{min-height:44px;padding:10px 16px;align-self:auto}
+.word-chips{list-style:none;margin:4px 0 2px;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.word-chip{display:flex;align-items:center;gap:2px;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:2px 2px 2px 12px;font-size:15px;color:var(--fg);font-weight:500;max-width:100%}
+.word-chip span{overflow-wrap:anywhere}
+.word-chip .x{width:34px;height:34px;border:0;background:none;color:var(--muted);display:grid;place-items:center;border-radius:50%;flex:0 0 auto;padding:0}
+.word-chip .x svg{width:15px;height:15px}
 .chips.wrap{flex-wrap:wrap;overflow:visible}
 .chip.caught{opacity:.5}
 .chip.caught[aria-pressed="true"]{opacity:1}
@@ -347,7 +358,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[]};}
 var S = load();
 function load(){
   var s = null;
@@ -357,6 +368,7 @@ function load(){
   if(!s.seeded){ s.subs[NEWSLINE.id] = NEWSLINE; if(s.fav.indexOf(NEWSLINE.id)<0) s.fav.unshift(NEWSLINE.id); s.seeded = true; }
   s.fav = s.fav.filter(function(id){return s.subs[id];});
   normAll(s.subs);
+  if(!Array.isArray(s.skipWords)) s.skipWords = []; if(!Array.isArray(s.hiWords)) s.hiWords = [];
   return s;
 }
 /* A show can sit under several subjects (cats). Copies from before that kept one subject in cat,
@@ -374,11 +386,58 @@ function normAll(subs){ Object.keys(subs||{}).forEach(function(id){ normCats(sub
 function catsOf(sh){ return (sh && Array.isArray(sh.cats)) ? sh.cats : []; }
 /* Played holds when it was marked: a positive time for played, a negative one for marked not played,
    so marking an episode not played on one device carries over to the others. */
-function isPlayed(g){ var v = S.played[g]; return v===true || +v > 0; }
+function isPlayed(g){ var v = S.played[g]; if(v===true || +v > 0) return true; if(+v < 0) return false; return !!skipBy(g); }
 function setPlayed(g, on){
   S.played[g] = on ? Date.now() : -Date.now();
   if(on){ delete S.pos[g]; S.posT[g] = Date.now(); }
 }
+/* Settings > Skip and highlight words. An episode whose title or description mentions a skip word counts
+   as played, so it leaves New to me and what plays next. One that mentions a highlight word stands out in
+   the lists with the word under its title. Words match whole, in any capitals. A highlight beats a skip,
+   and an episode you're partway through or have loaded in the player is never skipped. Nothing is written
+   to the played list, so taking a word off brings its episodes back, and whatever you marked yourself
+   (played, not played, Hear again) stands either way. */
+function wordKey(p){ return String(p||"").replace(/[\u2018\u2019\u02bc]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/\s+/g," ").trim().toLowerCase(); }
+var wordRxs = {};
+function wordRx(k){
+  if(wordRxs[k]) return wordRxs[k];
+  var body = k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/ /g,"\\s+"), rx;
+  try{ rx = new RegExp("(^|[^\\p{L}\\p{N}_])"+body+"(?=$|[^\\p{L}\\p{N}_])", "iu"); }
+  catch(e){ rx = {test:function(t){ return t.indexOf(k) >= 0; }}; }
+  return (wordRxs[k] = rx);
+}
+function hasWords(){ return !!((S.skipWords && S.skipWords.length) || (S.hiWords && S.hiWords.length)); }
+function firstHit(list, e, text){
+  for(var i=0;i<(list||[]).length;i++){ var k = wordKey(list[i]); if(k && ((e.m && e.m.indexOf(k)>=0) || wordRx(k).test(text))) return list[i]; }
+  return "";
+}
+function hitOf(e){ var text = wordKey((e.t||"")+" "+(e.x||"")), h = firstHit(S.hiWords, e, text); return {h:h, s: h ? "" : firstHit(S.skipWords, e, text)}; }
+// When a show's list arrives, the full notes are checked too (the saved copy keeps only the start of them).
+function fullHits(e){
+  var n = NOTES[e.g], text = (e.t||"")+" "+(e.x||"");
+  if(n && n.h && n.h.length > (e.x||"").length) text += " "+plain(n.h);
+  text = wordKey(text);
+  var out = [];
+  S.hiWords.concat(S.skipWords).forEach(function(w){ var k = wordKey(w); if(k && out.indexOf(k)<0 && wordRx(k).test(text)) out.push(k); });
+  return out;
+}
+var HITS = null;
+function hitMap(){ if(!HITS){ HITS = {}; if(hasWords()) Object.keys(S.cache).forEach(indexShow); } return HITS; }
+function indexShow(id){
+  if(!HITS || !hasWords()) return;
+  var c = S.cache[id]; if(c && c.eps) c.eps.forEach(function(e){ var r = hitOf(e); if(r.h || r.s) HITS[e.g] = r; else delete HITS[e.g]; });
+}
+function wordsChanged(){ HITS = null; }
+// The word that's skipping this episode right now, or "".
+function skipBy(g){
+  if(!S.skipWords || !S.skipWords.length) return "";
+  var r = hitMap()[g]; if(!r || !r.s) return "";
+  if((cur && cur.g===g) || (S.pos[g]||0) > 5) return "";
+  return r.s;
+}
+// Played only because of a skip word (nothing marked by hand).
+function skipWhy(g){ var v = S.played[g]; return (v===true || +v > 0 || +v < 0) ? "" : skipBy(g); }
+function hiOf(e){ if(!S.hiWords || !S.hiWords.length) return ""; return (hitMap()[e.g] || hitOf(e)).h; }
 var saveT = null;
 function save(now, quiet){
   clearTimeout(saveT);
@@ -572,7 +631,8 @@ function episodesFor(show, force){
     // New to me don't change length. The saved copy keeps shorter descriptions to save space.
     eps = eps.slice(0,100);
     noteNewest(show.id, newestOf(eps));
-    S.cache[show.id] = {at:Date.now(), eps:eps.map(function(e){ var c = {}; for(var k in e) c[k] = e[k]; if(c.x && c.x.length > 700) c.x = c.x.slice(0,700)+"…"; return c; }), gs:eps.map(function(e){ return e.g; })}; save(); delete inflight[show.id]; return eps;
+    if(hasWords()) eps.forEach(function(e){ var m = fullHits(e); if(m.length) e.m = m; else delete e.m; });
+    S.cache[show.id] = {at:Date.now(), eps:eps.map(function(e){ var c = {}; for(var k in e) c[k] = e[k]; if(c.x && c.x.length > 700) c.x = c.x.slice(0,700)+"…"; return c; }), gs:eps.map(function(e){ return e.g; })}; indexShow(show.id); save(); delete inflight[show.id]; return eps;
   }, function(err){ delete inflight[show.id]; if(c && c.eps) return c.eps; throw err; });
   inflight[show.id] = p; return p;
 }
@@ -830,7 +890,7 @@ function favRow(sh, i){
   if(!arranging) episodesFor(sh).then(function(eps){
     var e = eps[0];
     if(!e){ latest.textContent = "No episodes found"; return; }
-    latest.innerHTML = ""; latest.appendChild(el("b",{text:e.t})); latest.appendChild(document.createTextNode(" · "+fmtDate(e.d)+(e.v?" · Video":"")+(isPlayed(e.g)?" · Played":"")));
+    latest.innerHTML = ""; latest.appendChild(el("b",{text:e.t})); latest.appendChild(document.createTextNode(" · "+fmtDate(e.d)+(e.v?" · Video":"")+(isPlayed(e.g)? (skipWhy(e.g) ? " · Skipped" : " · Played") : "")));
     play.disabled = false; play.onclick = function(){ playEp(e, true); };
   }, function(){ latest.textContent = "Couldn't load episodes. Check your connection."; });
   return li;
@@ -1060,10 +1120,10 @@ function undoDrop(was){
 }
 /* Each row says where you stand with the episode: New (not started), time left (partly played) or Played. */
 function epRow(e, sh, tab, onMark, q){
-  var pos = S.pos[e.g]||0, played = isPlayed(e.g);
+  var pos = S.pos[e.g]||0, played = isPlayed(e.g), why = played ? skipWhy(e.g) : "", hi = hiOf(e);
   var len = e.len || (S.pos[e.g+"#len"]||0);
   var when = el("div",{class:"when"});
-  if(played) when.appendChild(el("span",{class:"badge heard", text:"Played"}));
+  if(played) when.appendChild(why ? el("span",{class:"badge skip", title:"Skipped because it mentions "+why, text:"Skipped: "+why}) : el("span",{class:"badge heard", text:"Played"}));
   else if(pos>5) when.appendChild(el("span",{class:"badge left", text: len ? fmtDur(Math.max(60, len-pos))+" left" : "In progress"}));
   else if(tab==="recent") when.appendChild(el("span",{class:"badge new", text:"New"}));
   when.appendChild(el("span",{text:fmtDate(e.d)}));
@@ -1080,15 +1140,15 @@ function epRow(e, sh, tab, onMark, q){
     details.hidden = !on; if(snip) snip.hidden = on;
     titleBtn.setAttribute("aria-expanded", String(on)); li.classList.toggle("open", on);
   }
-  var mark = el("button",{class:"icon-btn plain mark"+(played?" on":""), "aria-pressed":String(played), "aria-label": played ? "Played. Tap to mark "+e.t+" as not played" : "Mark "+e.t+" as played", html:ICON.check, onclick:function(){
+  var mark = el("button",{class:"icon-btn plain mark"+(played?" on":""), "aria-pressed":String(played), "aria-label": played ? (why ? "Skipped because it mentions "+why+". Tap to mark "+e.t+" as not played" : "Played. Tap to mark "+e.t+" as not played") : "Mark "+e.t+" as played", html:ICON.check, onclick:function(){
     setPlayed(e.g, !played); save(); toast(played ? "Marked as not played" : "Marked as played"); if(onMark) onMark();
   }});
   // A played episode can go back on the list to hear again, from the start.
   var again = played && !(q && q.c) ? el("button",{class:"pill-btn", text:"Hear again", "aria-label":"Hear "+e.t+" again", onclick:function(){
     setPlayed(e.g, false); delete S.pos[e.g]; S.posT[e.g] = Date.now(); save(); toast("Back in New to me"+(catsOf(sh).length ? " and in "+catsOf(sh).join(" and ") : "")); if(onMark) onMark();
   }}) : null;
-  var li = el("li",{class:"ep"+(played?" played":"")},[
-    el("div",null,[ q && q.c ? el("div",{class:"ep-show", text:sh.title}) : null, when, titleBtn ]),
+  var li = el("li",{class:"ep"+(played?" played":"")+(hi?" hi":"")},[
+    el("div",null,[ q && q.c ? el("div",{class:"ep-show", text:sh.title}) : null, when, titleBtn, hi ? el("div",{class:"hit", text:"★ "+hi}) : null ]),
     el("div",{class:"ep-acts"},[ again, mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true, q || {s:sh.id}); }}) ]),
     snip, details
   ]);
@@ -1109,8 +1169,10 @@ function fillDetails(box, e, sh, close){
   fact("Show", sh.title||"");
   fact("Published", fmtLong(e.d));
   fact("Length", len ? fmtDur(len) : "");
-  fact("Where you are", played ? "Played" : pos>5 ? (len ? fmtDur(Math.max(60, len-pos))+" left, from "+fmt(pos) : "Stopped at "+fmt(pos)) : "Not started");
+  var why = played ? skipWhy(e.g) : "", hi = hiOf(e);
+  fact("Where you are", played ? (why ? "Skipped, it mentions \u201c"+why+"\u201d" : "Played") : pos>5 ? (len ? fmtDur(Math.max(60, len-pos))+" left, from "+fmt(pos) : "Stopped at "+fmt(pos)) : "Not started");
   fact("Type", e.v ? "Video" : "Audio");
+  if(hi) fact("Highlighted", "It mentions \u201c"+hi+"\u201d");
   if(e.tr && e.tr.length) fact("Transcript", "Yes. Play it, then tap Transcript in the player.");
   box.appendChild(el("dl",{class:"facts"}, facts));
   var chBox = null;
@@ -1497,6 +1559,7 @@ function renderSettings(top, view){
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"capSel"},[ "Past episodes per show", capSel ]) ]),
     el("p",{text:"Keeps each show's Recent and New to me lists to its newest episodes, so a show you just followed doesn't fill them with its whole back catalog. Subjects and what plays next use the same limit. An episode you're partway through, or one you chose to hear again, always stays. A show's page has a button to see its older episodes."})
   ]));
+  view.appendChild(wordsCard());
   var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
   trimSel.onchange = function(){ S.trim = this.value==="1"; save(); trimStart(); };
   var minSel = el("select",{id:"trimMinSel"}, TRIM_MINS.map(function(v){ return el("option",{value:String(v), text:v+" sec", selected:v===(S.trimMin||1)}); }));
@@ -1530,7 +1593,7 @@ function renderSettings(top, view){
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"piKey"},[ "API key", keyInp ]), el("label",{class:"field", for:"piSecret"},[ "API secret", secInp ]) ]),
     el("div",{class:"btn-row"},[
       el("button",{class:"btn", text:"Save and test", onclick:function(){
-        S.pi = {key:keyInp.value.trim(), secret:secInp.value.trim()}; save(true); S.cache = {};
+        S.pi = {key:keyInp.value.trim(), secret:secInp.value.trim()}; save(true); S.cache = {}; wordsChanged();
         if(!hasPI()){ piStatus.className="status"; piStatus.textContent = "Key cleared. Search uses Apple Podcasts."; return; }
         piStatus.className="status"; piStatus.textContent = "Testing…";
         piSearch("amateur radio newsline").then(function(rs){ piStatus.textContent = "Works. Podcast Index found "+rs.length+" match"+(rs.length===1?"":"es")+" for a test search."; },
@@ -1570,6 +1633,54 @@ function renderSettings(top, view){
     el("p",{text:"Transcripts appear when a show publishes one. Ad skipping covers ads a show marks in its chapters and the start and end amounts you set; ads read in the middle of a show can't be detected."})
   ]));
 }
+function wordsCard(){
+  var status = el("p",{class:"status", "aria-live":"polite"});
+  function count(){
+    var s = 0, h = 0;
+    if(hasWords()) Object.keys(S.subs).forEach(function(id){ var c = S.cache[id]; if(c && c.eps) capEps(c.eps).forEach(function(e){ if(skipWhy(e.g)) s++; else if(!isPlayed(e.g) && hiOf(e)) h++; }); });
+    status.textContent = hasWords() ? "Right now "+s+" episode"+(s===1?" is":"s are")+" skipped and "+h+" unplayed one"+(h===1?" is":"s are")+" highlighted, in the episode lists loaded on this device." : "";
+  }
+  function editor(key, id, label, help){
+    var chips = el("ul",{class:"word-chips", "aria-label":label});
+    var inp = el("input",{id:id, type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", enterkeyhint:"done", maxlength:"400", placeholder:"Word or phrase"});
+    function changed(){ wordsChanged(); save(); draw(); count(); }
+    function draw(){
+      chips.innerHTML = "";
+      if(!S[key].length) chips.appendChild(el("li",{class:"note", text:"None yet."}));
+      S[key].forEach(function(w, i){ chips.appendChild(el("li",{class:"word-chip"},[ el("span",{text:w}), el("button",{class:"x", "aria-label":"Remove "+w, html:ICON.x, onclick:function(){ S[key].splice(i,1); changed(); toast("Removed \u201c"+w+"\u201d"); }}) ])); });
+    }
+    function add(){
+      var added = 0, other = key==="skipWords" ? S.hiWords : S.skipWords, both = [];
+      inp.value.split(",").forEach(function(p){
+        p = p.replace(/\s+/g," ").trim().slice(0,80); var k = wordKey(p); if(!k) return;
+        if(S[key].some(function(w){ return wordKey(w)===k; }) || S[key].length >= 200) return;
+        S[key].push(p); added++;
+        if(other.some(function(w){ return wordKey(w)===k; })) both.push(p);
+      });
+      inp.value = "";
+      if(added) changed();
+      if(both.length) toast("\u201c"+both[0]+"\u201d is on both lists, so it highlights and doesn't skip");
+    }
+    inp.addEventListener("keydown", function(ev){ if(ev.key==="Enter"){ ev.preventDefault(); add(); } });
+    draw();
+    return el("div",{class:"field"},[
+      el("label",{for:id, text:label}),
+      el("div",{class:"word-add"},[ inp, el("button",{class:"btn secondary", text:"Add", onclick:add}) ]),
+      chips,
+      el("p",{text:help})
+    ]);
+  }
+  var card = el("div",{class:"card"},[
+    el("h3",{text:"Skip and highlight words"}),
+    el("p",{text:"Both lists look for whole words or phrases in an episode's title and description, in any capitals. To add several at once, separate them with commas."}),
+    editor("skipWords", "skipWordIn", "Skip episodes that mention", "A match counts as played. It leaves New to me and what plays next, and shows as Skipped, with the word, under Recent. Hear again or the check mark brings it back. An episode you're partway through, or the one in the player, is never skipped."),
+    editor("hiWords", "hiWordIn", "Highlight episodes that mention", "A match stands out in the episode lists, with the word under its title. An episode that matches both lists is highlighted and not skipped."),
+    el("p",{text:"Taking a word off brings back the episodes it skipped, unless you played them yourself. Both lists sync through Dropbox."}),
+    status
+  ]);
+  count();
+  return card;
+}
 function importOpml(f, status){
   status.className = "status"; status.textContent = "Reading file…";
   f.text().then(function(txt){
@@ -1608,7 +1719,7 @@ function matchFeed(f){
   });
 }
 function backup(){
-  var data = {app:"podcast-player", v:1, at:new Date().toISOString(), subs:S.subs, fav:S.fav, pos:S.pos, played:S.played, speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip};
+  var data = {app:"podcast-player", v:1, at:new Date().toISOString(), subs:S.subs, fav:S.fav, pos:S.pos, played:S.played, speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, skipWords:S.skipWords, hiWords:S.hiWords};
   var blob = new Blob([JSON.stringify(data)], {type:"application/json"});
   var name = "podcast-player-backup-"+new Date().toISOString().slice(0,10)+".json";
   var f = null; try{ f = new File([blob], name, {type:"application/json"}); }catch(e){}
@@ -1621,6 +1732,7 @@ function restore(f){
     S.subs = d.subs||{}; normAll(S.subs); Object.keys(S.subs).forEach(function(id){ if(S.unf[id]) S.subs[id].fT = Date.now(); }); S.fav = (d.fav||[]).filter(function(id){return S.subs[id];}); S.pos = d.pos||{}; S.played = d.played||{}; S.speed = d.speed||1;
     S.posT = {}; Object.keys(S.pos).forEach(function(g){ if(!/#len$/.test(g)) S.posT[g] = Date.now(); });
     if(d.skipBack) S.skipBack = d.skipBack; if(d.skipFwd) S.skipFwd = d.skipFwd; if(typeof d.adSkip==="boolean") S.adSkip = d.adSkip; S.cache = {};
+    if(Array.isArray(d.skipWords)) S.skipWords = d.skipWords; if(Array.isArray(d.hiWords)) S.hiWords = d.hiWords; wordsChanged();
     save(true); applySkipLabels(); toast("Backup restored"); go({tab:"home"});
   }).catch(function(){ toast("That isn't a Podcast Player backup file"); });
 }
@@ -2422,7 +2534,7 @@ function dbxUpload(data, rev, keepalive){
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
   return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
-    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext, epCap:S.epCap}};
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext, epCap:S.epCap, skipWords:S.skipWords, hiWords:S.hiWords}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
 function stable(v){
@@ -2490,7 +2602,7 @@ function mergeSync(base, local, remote, fresh){
   [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
@@ -2503,10 +2615,12 @@ function isFresh(){
 function applyMerged(m){
   var before = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg, keep:S.keep});
   var lt = cur ? (S.posT[cur.g]||0) : 0;
-  var prefsBefore = stable(snap().prefs);
+  var prefsBefore = stable(snap().prefs), wordsBefore = stable([S.skipWords, S.hiWords]);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
   normAll(S.subs);
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  if(!Array.isArray(S.skipWords)) S.skipWords = []; if(!Array.isArray(S.hiWords)) S.hiWords = [];
+  var wordsMoved = stable([S.skipWords, S.hiWords])!==wordsBefore; if(wordsMoved) wordsChanged();
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
   if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){
@@ -2524,7 +2638,7 @@ function applyMerged(m){
   save(true, true);
   if(stable(snap().prefs)!==prefsBefore){ applySkipLabels(); $("speedSel").value = String(S.speed||1); if(cur) media.playbackRate = S.speed||1; }
   var changed = stable({subs:S.subs, fav:S.fav, played:S.played, hide:S.hideSugg, keep:S.keep})!==before;
-  if(changed && route.tab!=="settings" && !arranging) render();
+  if((changed || wordsMoved) && route.tab!=="settings" && !arranging) render();
 }
 function setSync(msg, err){
   sync.msg = msg; sync.err = !!err;
