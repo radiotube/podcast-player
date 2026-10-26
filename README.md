@@ -10,7 +10,7 @@ A podcast player web app for iPhone and iPad that installs to the Home Screen fr
 - Search: Podcast Index first (with your own free key, saved on your device), Apple Podcasts second
 - Skip back and forward amounts you choose, per-show skip at start and end, and skipping of ads a show marks in its chapters
 - Transcripts when a show publishes them (Podcasting 2.0), following along as it plays
-- Make transcripts (optional, off by default, set per device): when an episode has none, the app can make one with Whisper speech recognition running on the device (transformers.js, model downloaded once, about 41 MB). MP3 episodes from hosts that allow the app to read the audio. Finished transcripts are kept on the device and in Dropbox (Apps/<app>/transcripts), so each episode is made once
+- Make transcripts (optional, off by default, set per device): when an episode has none, the app can make one with Whisper speech recognition running on the device (transformers.js, model downloaded once, about 41 MB). MP3 episodes from hosts that allow the app to read the audio. Finished transcripts are kept on the device and in Dropbox (Apps/<app>/transcripts), so each episode is made once. Make them ahead (set per device) can make them in advance for your starred favorites or one subject while the app is open, newest unplayed episodes first
 - Speed, sleep timer, resume where you left off, lock screen controls
 - Shows that haven't put out an episode in over a year are flagged as candidates to unfollow; you choose Unfollow or Keep for each
 - OPML import from any podcast app (Overcast, Pocket Casts and others), and backup and restore between devices
