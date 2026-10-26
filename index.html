@@ -239,6 +239,8 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 .mk-bar .mk-t{flex:1 1 180px}
 .mk-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 10px;font-size:14px;color:var(--muted)}
 .mk-row span{flex:1 1 180px}
+.mk-auto .btn-row[hidden]{display:none}
+.mk-auto{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}
 
 /* Episode tabs, sort and listened marks */
 .ep-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -372,7 +374,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[], dbxBase:null};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[], dbxBase:null, mkAuto:"", mkAutoPaused:false, mkAutoNo:{}};}
 var S = load();
 function load(){
   var s = null, raw = null;
@@ -1888,6 +1890,9 @@ function playEp(e, autoplay, q, stayClosed){
   showVideo(useVideo);
   curSrc = useVideo ? "" : mkSrcOf(e.g);
   media.src = curSrc || e.u; media.playbackRate = S.speed||1; media.defaultPlaybackRate = S.speed||1;
+  // A transcript made ahead on another device came from one particular copy of the episode. Play that
+  // copy from the start, so the words line up without waiting for the Transcript view to be opened.
+  if(!useVideo && !curSrc && !(e.tr && e.tr.length)) mkFind(e.s, e.g).then(function(o){ if(o && o.src && cur && cur.g===e.g && !curSrc) mkUseSrc(e.g, o.src); });
   var intro = showObj.skipStart||0;
   media.addEventListener("loadedmetadata", function once(){
     media.removeEventListener("loadedmetadata", once);
@@ -2875,16 +2880,21 @@ function mkFinish(){
   mkPutLocal("tx", J.key, o).then(function(){ return mkDelLocal("txp", J.key); }).then(function(){
     return mkDbxPut(J.key, o, J.again).then(function(ok){ if(ok){ o.up = true; mkPutLocal("tx", J.key, o); } J.up = ok; mkUI(); });
   });
-  toast(J.segs.length ? "Transcript ready: "+J.t : "Finished, but no speech was found in "+J.t);
-  mkUI(); mkShowLive(true);
+  toast(J.segs.length ? (J.auto ? "Transcript made ahead: " : "Transcript ready: ")+J.t : "Finished, but no speech was found in "+J.t);
+  mkUI(); mkShowLive(true); mkAutoSoon(3000);
 }
 /* Start (or continue) making a transcript for an episode. */
-function mkStart(e, sh, again){
-  if(MK && !MK.dead){ if(MK.g===e.g){ if(MK.st==="net"){ MK.st = "run"; MK.retry = 0; mkStep(); } return; } toast("Already making one for "+MK.t+". Stop it first."); return; }
+function mkStart(e, sh, again, auto){
+  if(MK && !MK.dead){
+    if(MK.g===e.g){ if(MK.st==="net"){ MK.st = "run"; MK.retry = 0; mkStep(); } if(!auto) MK.auto = false; return; }
+    // One you ask for goes ahead of one the app was making on its own; that one picks up later.
+    if(MK.auto && !auto){ MK.bumped = true; mkStop(); }
+    else { if(!auto) toast("Already making one for "+MK.t+". Stop it first."); return; }
+  }
   var sid = (sh && sh.id) || e.s, u = String(e.u||""); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
   // Read the copy the player is on, when it's one an earlier transcript was made from.
   var from = (cur && cur.g===e.g && curSrc) || mkSrcOf(e.g) || u;
-  var J = MK = {g:e.g, sid:sid, t:e.t||"", show:(sh && sh.title) || showOf(sid).title || "", u0:u, url:from, again:!!again, len:e.len||0, st:"start", segs:[], buf:new Float32Array(0), bufT:0, skipTo:0, sl:[], ms:0, heard:0, started:Date.now()};
+  var J = MK = {g:e.g, sid:sid, t:e.t||"", show:(sh && sh.title) || showOf(sid).title || "", u0:u, url:from, again:!!again, auto:!!auto, len:e.len||0, st:"start", segs:[], buf:new Float32Array(0), bufT:0, skipTo:0, sl:[], ms:0, heard:0, started:Date.now()};
   if(e.v || isVideo(e.ty, e.u)){ J.st = "video"; J.dead = true; mkUI(); return; }
   mkUI();
   mkKey(sid, e.g).then(function(key){ J.key = key; return mkGetLocal("txp", key); }).then(function(p){
@@ -2900,6 +2910,8 @@ function mkStart(e, sh, again){
 }
 function mkStop(){
   var J = MK; if(!J) return;
+  // Stopping one the app was making on its own also pauses making them ahead, until Resume.
+  if(J.auto && !J.bumped && !J.dead){ S.mkAutoPaused = true; save(false, true); toast("Making transcripts ahead is paused. Resume it in Settings."); }
   if(!J.dead){ J.dead = true; if(J.ctl) try{ J.ctl.abort(); }catch(e){} mkEnd(); mkWake(false); if(J.segs.length) mkSavePart(); }
   J.st = "stopped"; mkUI();
 }
@@ -2972,14 +2984,164 @@ function mkShowLive(final){
 }
 function segCues(segs){ return mergeCues(segs.filter(function(s){ return s && String(s[2]).trim(); }).map(function(s){ return {s:s[0], e:s[1], w:"", b:s[2]}; })); }
 
+/* ---------- Making transcripts ahead ----------
+   Settings > Make transcripts > Make them ahead: while the app is open on screen, it lines up the unplayed
+   episodes of the chosen shows (starred favorites, or one subject) that have no transcript yet, and makes
+   them one at a time, newest first. Each one lands in Dropbox like any other, so it's ready on every device.
+   The choice, the pause and the list of episodes it couldn't read are kept on this device only (never synced),
+   so it can run on the computer and stay off on the iPhone. It never makes more than the newest few
+   episodes of a show: the Past episodes per show setting, or 5 when that's set to all. */
+var MKA = {q:[], at:0, busy:false, have:null, haveAt:0, msg:"", timer:null, tick:null};
+var MKA_RETRY = {net:3600e3, changed:3600e3, model:6*3600e3, failed:24*3600e3};
+function mkAutoMode(){ return mkOn() ? String(S.mkAuto||"") : ""; }
+function mkAutoLabel(m){ m = m==null ? mkAutoMode() : m; return m==="*fav" ? "starred favorites" : m.indexOf("cat:")===0 ? "the "+m.slice(4)+" subject" : ""; }
+function mkAutoShows(){
+  var m = mkAutoMode();
+  if(m==="*fav") return S.fav.map(function(id){ return S.subs[id]; }).filter(Boolean);
+  if(m.indexOf("cat:")===0){ var c = m.slice(4); return Object.keys(S.subs).map(function(id){ return S.subs[id]; }).filter(function(sh){ return catsOf(sh).indexOf(c)>=0; }); }
+  return [];
+}
+/* An episode it tried and couldn't make. Some reasons are worth another try later; the rest aren't. */
+function mkAutoNoted(g){
+  var n = (S.mkAutoNo||{})[g]; if(!n) return false;
+  var wait = MKA_RETRY[n.st]; return !wait || Date.now()-n.t < wait;
+}
+function mkAutoNote(g, st){
+  S.mkAutoNo = S.mkAutoNo||{}; S.mkAutoNo[g] = {st:st, t:Date.now()};
+  var ks = Object.keys(S.mkAutoNo);
+  if(ks.length > 400) ks.sort(function(a,b){ return S.mkAutoNo[a].t - S.mkAutoNo[b].t; }).slice(0, ks.length-400).forEach(function(k){ delete S.mkAutoNo[k]; });
+  save(false, true);
+}
+/* The transcripts already in Dropbox, read once in a while as one folder listing instead of one by one. */
+function mkAutoHave(){
+  if(MKA.have && Date.now()-MKA.haveAt < 10*60*1000) return Promise.resolve(MKA.have);
+  if(!dbx) return Promise.resolve({});
+  var have = {};
+  var add = function(j){ (j.entries||[]).forEach(function(x){ var m = /^([0-9a-f]+)\.json$/.exec(x.name||""); if(m) have[m[1]] = 1; }); return j.has_more ? dbxApi("files/list_folder/continue", {cursor:j.cursor}).then(add) : have; };
+  return dbxApi("files/list_folder", {path:"/transcripts", limit:2000}).then(add, function(e){ if(/not_found/.test(String(e && e.message))) return have; throw e; })
+    .then(function(h){ MKA.have = h; MKA.haveAt = Date.now(); return h; });
+}
+function mkAutoHasOwn(e){ return !!(e.tr && e.tr.length); }
+function mkAutoWanted(e){ return e && e.u && !e.v && !isVideo(e.ty, e.u) && !mkAutoHasOwn(e) && !isPlayed(e.g) && !mkAutoNoted(e.g); }
+/* Builds the list: the newest unplayed episodes of each chosen show that has no transcript anywhere yet. */
+function mkAutoScan(){
+  if(MKA.busy || !mkAutoMode()) return Promise.resolve();
+  MKA.busy = true; MKA.msg = "Looking for new episodes…"; mkAutoShow();
+  var shows = mkAutoShows(), found = [], per = epCap() || 5;
+  return shows.reduce(function(p, sh){
+    return p.then(function(){
+      if(txBlocked(sh.id)) return;
+      return episodesFor(sh).then(function(eps){
+        byDate(capEps(eps), false).slice(0, per).forEach(function(e){ if(mkAutoWanted(e)) found.push({e:e, sh:sh, t:new Date(e.d).getTime()||0}); });
+      }, function(){});
+    });
+  }, Promise.resolve()).then(function(){
+    return mkAutoHave().catch(function(){ return {}; });
+  }).then(function(have){
+    return Promise.all(found.map(function(x){ return mkKey(x.sh.id, x.e.g).then(function(k){ x.key = k; return mkGetLocal("tx", k); }).then(function(o){ x.done = !!(o && o.segs) || !!have[x.key] || !!mkMade[x.key]; }, function(){}); }));
+  }).then(function(){
+    MKA.q = found.filter(function(x){ return !x.done; }).sort(function(a,b){ return b.t - a.t; });
+    MKA.at = Date.now(); MKA.msg = "";
+  }).catch(function(){ MKA.msg = "Couldn't look for new episodes just now. It tries again in a while."; })
+    .then(function(){ MKA.busy = false; mkAutoShow(); });
+}
+/* What the last one it made on its own ended with, so a bad episode isn't tried over and over. */
+function mkAutoAfter(J){
+  if(!J || !J.auto || J.autoSeen || !J.dead) return;
+  J.autoSeen = true;
+  if(J.st==="done") return;
+  if(J.st==="stopped"){ if(J.bumped) MKA.at = 0; return; }
+  mkAutoNote(J.g, J.st);
+  if(J.st==="model"){ MKA.msg = "The speech model wouldn't load, so making ahead is waiting. It tries again in a few hours."; }
+}
+function mkAutoNext(){
+  if(!mkAutoMode() || S.mkAutoPaused || document.hidden || MKA.busy || MKA.picking) return;
+  if(MK && MK.auto && !MK.dead && MK.st==="net" && (MK.retry||0) > 3){ MK.st = "net"; MK.dead = true; mkEnd(); mkWake(false); if(MK.segs.length) mkSavePart(); MK.autoSeen = true; mkAutoNote(MK.g, "net"); mkUI(); }
+  if(MK && !MK.dead) return;
+  if(MK) mkAutoAfter(MK);
+  if(!MKA.at || Date.now()-MKA.at > 30*60*1000){ mkAutoScan().then(function(){ setTimeout(mkAutoNext, 500); }); return; }
+  mkAutoPick();
+}
+/* Takes the next one off the list, checking first that no device has made it in the meantime. */
+function mkAutoPick(){
+  var x = MKA.q.shift();
+  if(!x){ mkAutoShow(); return; }
+  if(!mkAutoWanted(x.e) || txBlocked(x.sh.id) || mkMade[x.key]) return mkAutoPick();
+  MKA.picking = true;
+  mkFind(x.sh.id, x.e.g).then(function(o){
+    MKA.picking = false;
+    if(o && o.segs) return mkAutoPick();
+    if(!mkAutoMode() || S.mkAutoPaused || document.hidden || (MK && !MK.dead)){ MKA.q.unshift(x); mkAutoShow(); return; }
+    mkStart(Object.assign({s:x.sh.id}, x.e), x.sh, false, true);
+    mkAutoShow();
+  });
+}
+function mkAutoSoon(ms){ clearTimeout(MKA.timer); if(mkAutoMode()) MKA.timer = setTimeout(mkAutoNext, ms||1000); }
+function mkAutoRun(){
+  clearInterval(MKA.tick); MKA.tick = null;
+  if(!mkAutoMode()) return;
+  MKA.tick = setInterval(mkAutoNext, 15000);
+  mkAutoSoon(1500);
+}
+/* The status line in Settings. */
+function mkAutoText(){
+  var m = mkAutoMode(); if(!m) return "";
+  var J = MK && MK.auto && !MK.dead ? MK : null, n = MKA.q.length;
+  var t = J ? "Working on "+J.t+(J.show ? " ("+J.show+")" : "")+". "+mkText(J) : MKA.busy ? MKA.msg : S.mkAutoPaused ? "Paused." : MK && !MK.dead ? "Waiting while the app makes the one you asked for." : MKA.msg || (MKA.at ? "Nothing to make right now. It looks for new episodes every half hour while the app is open." : "Starting…");
+  if(n && !MKA.busy) t = t.replace(/[.…]?\s*$/, function(m){ return m.trim() ? m.trim() : "."; })+" "+n+" more waiting.";
+  if(S.mkAutoPaused && J) t = "Paused. "+t;
+  if(document.hidden) t += " It waits while the app is off screen.";
+  return t;
+}
+var mkAutoEls = null;
+function mkAutoShow(){
+  if(!mkAutoEls) return;
+  mkAutoEls.st.textContent = mkAutoText();
+  mkAutoEls.row.hidden = !mkAutoMode();
+  mkAutoEls.pause.textContent = S.mkAutoPaused ? "Resume" : "Pause";
+}
+mkRows.push({row:{get isConnected(){ return true; }}, fn:mkAutoShow});
+setTimeout(mkAutoRun, 20000);
+document.addEventListener("visibilitychange", function(){ if(!document.hidden) mkAutoSoon(2000); });
+
+/* Stops one the app was making on its own, without pausing; it can pick up from there later. */
+function mkAutoQuit(){ if(MK && MK.auto && !MK.dead){ MK.bumped = true; mkStop(); } MKA.q = []; MKA.at = 0; }
+function mkAutoCard(){
+  var m = String(S.mkAuto||""), subs = subjects();
+  var opts = [ el("option",{value:"", text:"Off", selected:!m}), el("option",{value:"*fav", text:"Starred favorites", selected:m==="*fav"}) ];
+  subs.forEach(function(c){ opts.push(el("option",{value:"cat:"+c, text:"Subject: "+c, selected:m==="cat:"+c})); });
+  if(m.indexOf("cat:")===0 && subs.indexOf(m.slice(4))<0) opts.push(el("option",{value:m, text:"Subject: "+m.slice(4)+" (no shows now)", selected:true}));
+  var sel = el("select",{id:"mkAutoSel"}, opts);
+  sel.onchange = function(){
+    S.mkAuto = this.value; S.mkAutoPaused = false; save(false, true);
+    mkAutoQuit(); mkAutoRun(); render();
+  };
+  var st = el("p",{class:"status", "aria-live":"polite"});
+  var pause = el("button",{class:"btn secondary", text:"Pause", onclick:function(){
+    S.mkAutoPaused = !S.mkAutoPaused; save(false, true);
+    if(S.mkAutoPaused){ if(MK && MK.auto && !MK.dead){ MK.bumped = true; mkStop(); MKA.at = 0; } }
+    else mkAutoSoon(500);
+    mkAutoShow();
+  }});
+  var row = el("div",{class:"btn-row"},[ pause ]);
+  var box = el("div",{class:"mk-auto"},[
+    el("h3",{text:"Make them ahead"}),
+    el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkAutoSel"},[ "Make transcripts ahead for", sel ]) ]),
+    el("p",{text:"While the app is open on screen, it lines up new episodes of these shows that you haven't played and that have no transcript yet, and makes them one at a time, newest first. Each one goes to your Dropbox, so it's ready on your other devices when you listen. It looks for new episodes every half hour, and takes at most the newest "+(epCap()||5)+" of each show (your Past episodes per show setting). Shows whose host won't let the app read the audio are left out."}),
+    el("p",{text:"Best on a computer that's plugged in: leave the app open in its own browser window, as the front tab, and not minimized. It waits whenever the app is off screen. This choice is kept on this device only."}),
+    st, row
+  ]);
+  mkAutoEls = {st:st, pause:pause, row:row}; mkAutoShow();
+  return box;
+}
 function makeCard(){
   var on = mkOn();
   var sel = el("select",{id:"mkSel"},[ el("option",{value:"0", text:"Off", selected:!on}), el("option",{value:"1", text:"On", selected:on}) ]);
-  sel.onchange = function(){ S.txMake = this.value==="1"; save(false, true); mkUI(); render(); };
+  sel.onchange = function(){ S.txMake = this.value==="1"; save(false, true); if(!mkOn()) mkAutoQuit(); mkAutoRun(); mkUI(); render(); };
   var card = el("div",{class:"card"},[
     el("h3",{text:"Make transcripts"}),
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkSel"},[ "Make transcripts on this device", sel ]) ]),
-    el("p",{text:"When an episode has no transcript of its own, the app can make one with speech recognition that runs right on this device. It's free and nothing is sent to anyone. Each one is made only when you tap Make a transcript, in the player's Transcript view or in an episode's details."}),
+    el("p",{text:"When an episode has no transcript of its own, the app can make one with speech recognition that runs right on this device. It's free and nothing is sent to anyone. Each one is made when you tap Make a transcript, in the player's Transcript view or in an episode's details, or ahead of time for the shows you pick under Make them ahead."}),
     el("p",{text:"The first time, the app downloads a speech model of about "+MK_MODEL_MB+" MB and keeps it. Making a transcript works through the whole episode, so it takes a while and uses the battery hard. It only runs while the app is open on screen, so the screen stays on until it's done. If it stops, it can pick up where it left off. English only, and it will have some mistakes."}),
     el("p",{text:"It works on MP3 episodes from podcast hosts that let the app read the audio, the same ones that can trim long pauses. Shows whose host turns the app away are marked on their page, and the app checks them again every two weeks, since hosts change. Finished transcripts are saved in your Dropbox, so each episode is made once and shows on all your devices. Skip and highlight words still look only at titles and descriptions."}),
     el("p",{text:"This setting is kept on each device, so you can leave it off on the iPhone and on for the iPad or computer."})
@@ -3005,6 +3167,7 @@ function makeCard(){
     list();
     card.appendChild(st);
     card.appendChild(el("div",{class:"btn-row"},[ chk ]));
+    card.appendChild(mkAutoCard());
   }
   if("caches" in window) card.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Remove the speech model", onclick:function(){
     var b = this; caches.delete("transformers-cache").then(function(had){ toast(had ? "Speech model removed. It downloads again next time." : "The speech model isn't on this device."); b.disabled = true; });
