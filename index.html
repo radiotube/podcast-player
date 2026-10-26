@@ -372,7 +372,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[]};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[]};}
 var S = load();
 function load(){
   var s = null;
@@ -1019,6 +1019,7 @@ function renderShow(top, view, id){
   view.appendChild(el("div",{class:"show-head"},[ el("img",{src:sh.art||"", alt:""}), el("div",null,[ el("h2",{text:sh.title}), el("p",{class:"a", text:sh.author||""}), actions ]) ]));
   if(subbed && isQuiet(sh)) view.appendChild(quietCard(sh));
   if(subbed) view.appendChild(showSettings(sh));
+  var txN = txShowNote(sh); view.appendChild(txN);
   var listWrap = el("section",null,[ el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"}) ]);
   view.appendChild(listWrap);
   var fresh = !!route.fresh; route.fresh = false;
@@ -1026,6 +1027,7 @@ function renderShow(top, view, id){
     listWrap.innerHTML = "";
     if(!eps.length){ listWrap.appendChild(el("p",{class:"empty", text:"No episodes found for this show."})); return; }
     drawEps(listWrap, eps, sh, 20, false);
+    txProbe(sh, eps).then(function(){ if(txN.isConnected) txN.fill(); });
   }, function(){
     listWrap.innerHTML = "";
     listWrap.appendChild(el("p",{class:"empty", text: sh.itunesId || hasPI() ? "Couldn't reach the podcast directory. Check your connection and try again." : "This show isn't in Apple's directory and its feed doesn't let web apps read it. Adding your Podcast Index key in Settings may fix that."}));
@@ -1248,6 +1250,11 @@ function makeRow(e, sh){
     if(o || (J && J.st==="done" && J.segs.length)){ row.appendChild(el("span",{text:"Transcript: made by this app. Play the episode, then tap Transcript in the player."})); return; }
     if(!mkOn()){ row.hidden = true; return; }
     row.hidden = false;
+    if(!part && txBlocked(sid)){
+      row.appendChild(el("span",{text:"No transcript from the show, and its host won't let the app read the audio on this device, so the app can't make one."}));
+      row.appendChild(el("button",{class:"pill-btn", text:"Try anyway", onclick:function(){ mkStart(Object.assign({s:sid}, e), sh); draw(null); }}));
+      return;
+    }
     row.appendChild(el("span",{text: part ? "No transcript from the show. The app made part of one and stopped at "+fmt(part)+"." : "No transcript from the show. The app can make one on this device. It takes a while and works only while the app is on screen."}));
     row.appendChild(el("button",{class:"pill-btn", text: part ? "Continue" : "Make a transcript", onclick:function(){ mkStart(Object.assign({s:sid}, e), sh); draw(null); }}));
   };
@@ -2517,6 +2524,62 @@ var MK_MSG = {
   failed:"Something went wrong while making the transcript."
 };
 function mkOn(){ return S.txMake === true; }
+/* What this device found when it last tried to read each show's audio: S.txRes[show id] = {st:"ok" or "blocked", t:time}.
+   Kept on the device only, because a host can let one browser in and turn another away. A result older
+   than two weeks is checked again when the show's page opens, since hosts change. */
+var TX_RECHECK = 14*24*3600*1000, txProbing = {};
+function txBlocked(sid){ var r = (S.txRes||{})[sid]; return !!(r && r.st==="blocked"); }
+function txNote(sid, st){
+  if(!sid) return; S.txRes = S.txRes||{};
+  S.txRes[sid] = {st:st, t:Date.now()}; save(false, true);
+  var n = $("txShowNote"); if(n && n.fill) n.fill();
+}
+/* A light check: asks the host for the first 4 KB of the show's newest audio episode, then for the plain
+   file (stopped as soon as the host answers), the same two ways the transcript maker reads it.
+   Resolves to "ok", "blocked", or null when it couldn't tell (no episode, timeout, a server error). */
+function txProbe(sh, eps, force){
+  var sid = sh && sh.id; if(!sid || !mkOn()) return Promise.resolve(null);
+  var r = (S.txRes||{})[sid];
+  if(!force && r && Date.now()-r.t < TX_RECHECK) return Promise.resolve(r.st);
+  if(txProbing[sid]) return txProbing[sid];
+  var e = (eps||[]).filter(function(x){ return x.u && !x.v && !isVideo(x.ty, x.u); }).sort(function(a,b){ return (new Date(b.d).getTime()||0)-(new Date(a.d).getTime()||0); })[0];
+  if(!e) return Promise.resolve(null);
+  var u = String(e.u); if(/^http:/i.test(u)) u = "https:"+u.slice(5);
+  var ask = function(plain){
+    var ctl = new AbortController(), to = setTimeout(function(){ ctl.abort(); }, 20000);
+    return fetch(u, plain ? {mode:"cors", signal:ctl.signal} : {mode:"cors", headers:{Range:"bytes=0-4095"}, signal:ctl.signal}).then(function(res){
+      clearTimeout(to); try{ ctl.abort(); }catch(x){} return res;
+    }, function(err){ clearTimeout(to); throw err; });
+  };
+  var p = ask(false).catch(function(err){ if(err && err.name==="TypeError") return ask(true); throw err; }).then(function(res){
+    if(res.status===200 || res.status===206){ txNote(sid, "ok"); return "ok"; }
+    return null;
+  }, function(err){
+    if(err && err.name==="TypeError"){ txNote(sid, "blocked"); return "blocked"; }
+    return null;
+  }).then(function(v){ delete txProbing[sid]; return v; });
+  txProbing[sid] = p; return p;
+}
+/* The note on a show's page when this device can't read the show's audio. */
+function txShowNote(sh){
+  var box = el("div",{class:"card", id:"txShowNote"});
+  var fill = function(){
+    var r = (S.txRes||{})[sh.id];
+    box.innerHTML = "";
+    if(!mkOn() || !r || r.st!=="blocked"){ box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(el("p",{text:"No transcripts from this app for this show. Its host won't let the app read the audio on this device, so the app can't make transcripts for it (or trim its long pauses). Checked "+fmtDate(new Date(r.t).toISOString())+"."}));
+    box.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"pill-btn", text:"Check again", onclick:function(){
+      var b = this; b.disabled = true; b.textContent = "Checking…";
+      episodesFor(sh).then(function(eps){ return txProbe(sh, eps, true); }).then(function(v){
+        toast(v==="ok" ? "The host lets the app in now. Transcripts can be made for this show." : v==="blocked" ? "The host still turns the app away." : "Couldn't tell just now. Try again later.");
+        fill();
+      }, function(){ toast("Couldn't load this show's episodes."); fill(); });
+    }}) ]));
+  };
+  fill(); box.fill = fill;
+  return box;
+}
 function mkKey(sid, g){
   return crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(sid)+"|"+String(g))).then(function(b){
     return Array.prototype.map.call(new Uint8Array(b).slice(0, 12), function(x){ return (x<16?"0":"")+x.toString(16); }).join("");
@@ -2626,7 +2689,7 @@ function mkBytes(start, len){
     var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||""); if(m) J.size = +m[1];
     if(r.status===200 && +(r.headers.get("content-length")||0) > MK_MAX){ ctl.abort(); clearTimeout(to); throw new Error("big"); }
     return r.arrayBuffer().then(function(ab){
-      clearTimeout(to); J.got = true;
+      clearTimeout(to); J.got = true; if(!J.okd){ J.okd = true; txNote(J.sid, "ok"); }
       if(r.status===200){ J.mem = new Uint8Array(ab); J.size = J.mem.length; return J.mem.subarray(start, Math.min(J.mem.length, start+len)); }
       return new Uint8Array(ab);
     });
@@ -2734,7 +2797,7 @@ function mkStep(){
     else if(e && e.model){ J.st = "model"; J.err = msg.replace(/^model:\s*/,""); }
     else if(e && e.run){ J.st = "failed"; J.err = msg; }
     else if(msg==="decode" || msg==="big") J.st = msg;
-    else if(!J.got && !J.resumed) J.st = "blocked";
+    else if(!J.got && !J.resumed){ J.st = "blocked"; if(e && e.name==="TypeError") txNote(J.sid, "blocked"); }
     else { J.st = "net"; J.retry = (J.retry||0) + 1; if(J.retry <= 3 && !document.hidden){ setTimeout(function(){ if(MK===J && !J.dead && J.st==="net") { J.st = "run"; mkStep(); } }, 4000); } }
     if(J.st!=="net" && J.st!=="run"){ J.dead = true; mkEnd(); }
     mkUI();
@@ -2774,7 +2837,7 @@ function mkStart(e, sh){
   }).then(function(){ if(!J.dead){ J.st = J.st==="start" ? "model" : J.st; mkUI(); mkStep(); } }).catch(function(err){
     if(J.dead) return;
     var em = String(err && err.message);
-    J.st = em==="format" || em==="big" ? em : (J.got ? "failed" : "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
+    J.st = em==="format" || em==="big" ? em : (J.got ? "failed" : "blocked"); if(J.st==="blocked" && err && err.name==="TypeError") txNote(J.sid, "blocked"); J.err = String(err && err.message || err); J.dead = true; mkUI();
   });
 }
 function mkStop(){
@@ -2825,6 +2888,10 @@ function mkUI(){
     if(live) bar.appendChild(el("button",{class:"pill-btn", text:"Stop", onclick:mkStop}));
     else if(J.st==="stopped" || J.st==="net") bar.appendChild(el("button",{class:"pill-btn", text:"Continue", onclick:function(){ if(MK.st==="net" && !MK.dead) { MK.st = "run"; MK.retry = 0; mkStep(); } else { MK = null; mkStart(c, showOf(c.s)); } }}));
     bar.hidden = J.st==="done" && J.up!==false;
+  } else if(c && txFor===c.g && txKind==="none" && mkOn() && !c.v && txBlocked(c.s)){
+    bar.appendChild(el("span",{class:"mk-t", text:"This show's host won't let the app read its audio on this device, so the app can't make a transcript for it."}));
+    bar.appendChild(el("button",{class:"pill-btn", text:"Try anyway", onclick:function(){ mkStart(c, showOf(c.s)); mkShowLive(); }}));
+    bar.hidden = false;
   } else if(c && txFor===c.g && txKind==="none" && mkOn() && !c.v){
     bar.appendChild(el("span",{class:"mk-t", text:"The app can make a transcript for this episode on this device. It takes a while and works only while the app is on screen."}));
     bar.appendChild(el("button",{class:"pill-btn", text:"Make a transcript", onclick:function(){ mkStart(c, showOf(c.s)); mkShowLive(); }}));
@@ -2852,9 +2919,31 @@ function makeCard(){
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"mkSel"},[ "Make transcripts on this device", sel ]) ]),
     el("p",{text:"When an episode has no transcript of its own, the app can make one with speech recognition that runs right on this device. It's free and nothing is sent to anyone. Each one is made only when you tap Make a transcript, in the player's Transcript view or in an episode's details."}),
     el("p",{text:"The first time, the app downloads a speech model of about "+MK_MODEL_MB+" MB and keeps it. Making a transcript works through the whole episode, so it takes a while and uses the battery hard. It only runs while the app is open on screen, so the screen stays on until it's done. If it stops, it can pick up where it left off. English only, and it will have some mistakes."}),
-    el("p",{text:"It works on MP3 episodes from podcast hosts that let the app read the audio, the same ones that can trim long pauses. Finished transcripts are saved in your Dropbox, so each episode is made once and shows on all your devices. Skip and highlight words still look only at titles and descriptions."}),
+    el("p",{text:"It works on MP3 episodes from podcast hosts that let the app read the audio, the same ones that can trim long pauses. Shows whose host turns the app away are marked on their page, and the app checks them again every two weeks, since hosts change. Finished transcripts are saved in your Dropbox, so each episode is made once and shows on all your devices. Skip and highlight words still look only at titles and descriptions."}),
     el("p",{text:"This setting is kept on each device, so you can leave it off on the iPhone and on for the iPad or computer."})
   ]);
+  if(on){
+    var st = el("p",{class:"status"});
+    var list = function(){
+      var bad = Object.keys(S.subs).filter(txBlocked).map(function(id){ return S.subs[id].title||"Untitled"; }).sort();
+      var known = Object.keys(S.subs).filter(function(id){ return (S.txRes||{})[id]; }).length;
+      st.textContent = !known ? "This device hasn't checked your shows yet. Each show is checked when you open its page, or all at once below." :
+        bad.length ? "Shows whose host won't let the app read the audio on this device ("+bad.length+"): "+bad.join(", ")+"." : "Every show checked so far lets the app read its audio on this device.";
+    };
+    var chk = el("button",{class:"btn secondary", text:"Check all my shows", onclick:function(){
+      var ids = Object.keys(S.subs), i = 0; chk.disabled = true;
+      var next = function(){
+        if(i >= ids.length){ chk.disabled = false; list(); toast("Checked "+ids.length+" shows."); return; }
+        var sh = S.subs[ids[i++]]; if(!sh){ next(); return; }
+        st.textContent = "Checking "+i+" of "+ids.length+": "+(sh.title||"")+"…";
+        episodesFor(sh).then(function(eps){ return txProbe(sh, eps, true); }).catch(function(){}).then(next);
+      };
+      next();
+    }});
+    list();
+    card.appendChild(st);
+    card.appendChild(el("div",{class:"btn-row"},[ chk ]));
+  }
   if("caches" in window) card.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Remove the speech model", onclick:function(){
     var b = this; caches.delete("transformers-cache").then(function(had){ toast(had ? "Speech model removed. It downloads again next time." : "The speech model isn't on this device."); b.disabled = true; });
   }}) ]));
