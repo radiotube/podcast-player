@@ -2491,6 +2491,29 @@ render();
 if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(function(){});
 if(dbx) syncNow();
 setTimeout(function(){ if(Date.now()-(S.quietAt||0) > QUIET_RESCAN) quietScan(); }, 6000);
+
+/* TEST ONLY: ?mockpi=ok|fail|empty fakes Podcast Index answers built from Apple's real results */
+(function(){
+  var m = (location.search.match(/mockpi=(\w+)/)||[])[1]; if(!m) return;
+  S.pi = {key:"testkey", secret:"testsecret"};
+  addEventListener("pagehide", function(){ S.pi = {}; save(); });
+  var realFetch = window.fetch;
+  window.fetch = function(u, o){
+    u = String(u); if(u.indexOf("api.podcastindex.org")<0) return realFetch.apply(this, arguments);
+    var q = decodeURIComponent((u.match(/[?&]q=([^&]*)/)||[])[1]||"").replace(/\+/g," ");
+    var wait = new Promise(function(r){ setTimeout(r, 1200); });
+    if(m==="fail") return wait.then(function(){ return new Response("x",{status:500}); });
+    if(m==="empty") return wait.then(function(){ return new Response(JSON.stringify({feeds:[]}),{status:200}); });
+    return Promise.all([appleSearch(q, 30), wait]).then(function(a){ var rs = a[0];
+      var f = [];
+      if(rs[0]) f.push({id:101, itunesId:rs[0].itunesId, title:rs[0].title, author:rs[0].author, url:rs[0].feedUrl, artwork:rs[0].art});
+      if(rs[1]) f.push({id:102, itunesId:0, title:rs[1].title+" (PI copy)", author:"someone else", url:rs[1].feedUrl.replace(/^https?:\/\//,"http://www.")+"/", artwork:rs[1].art});
+      if(rs[2]) f.push({id:103, itunesId:0, title:rs[2].title, author:rs[2].author, url:"https://pi-mirror.example/feed", artwork:rs[2].art});
+      f.push({id:104, itunesId:0, title:"PI Only Test Show", author:"Test", url:"https://example.com/pi-only.xml", artwork:""});
+      return new Response(JSON.stringify({feeds:f}),{status:200});
+    });
+  };
+})();
 window.__pp = {S:S, quietScan:quietScan, isQuiet:isQuiet, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
 })();
 </script>
