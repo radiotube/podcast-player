@@ -2559,7 +2559,7 @@ function mkUseSrc(g, src){
   if(!src) return; mkKeepSrc(g, src);
   if(!cur || cur.g!==g || curSrc===src || media===video) return;
   var t = media.currentTime||0, playing = !media.paused && !media.ended;
-  curSrc = src; media.src = src;
+  curSrc = src; media.src = src; toast("DEBUG switched to "+src.replace(/^https:\/\/([^\/]+).*$/,"$1")+" at "+Math.round(t));
   if(t > 1){ wantAt = t; media.addEventListener("loadedmetadata", function once(){ media.removeEventListener("loadedmetadata", once); progSeek = true; try{ media.currentTime = t; }catch(x){ progSeek = false; } }); }
   if(playing){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); }
   trimStart();
