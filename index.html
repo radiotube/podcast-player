@@ -767,12 +767,13 @@ function enableDrag(list){
     });
   });
 }
-function showRow(sh, withCount){
+function showRow(sh, withCount, viaApple){
   var subbed = !!S.subs[sh.id];
   var a = el("div",{class:"a"});
   var u = withCount ? unheard(sh) : null;
   if(subbed && isQuiet(sh)){ a.appendChild(el("span",{class:"badge quiet", text:"Quiet 1+ year"})); a.appendChild(document.createTextNode(" ")); }
   if(u && u.length) a.appendChild(el("span",{class:"new", text:u.length+" new to me · "}));
+  if(viaApple) a.appendChild(el("span",{class:"via", text:"via Apple · "}));
   a.appendChild(document.createTextNode((sh.author||"")+(sh.medium==="video"?" · Video":"")));
   return el("li",{class:"show-row"},[
     el("img",{src:sh.art||"", alt:"", loading:"lazy"}),
@@ -1232,45 +1233,78 @@ function suggRow(sh, subj, body, entry){
   ]);
 }
 
-/* ---------- Search: Podcast Index first, Apple Podcasts second ---------- */
-var lastSearch = {q:"", pi:null, apple:null, piErr:""};
+/* ---------- Search: Podcast Index first, Apple Podcasts as backup ----------
+   With a Podcast Index key, both are asked at once. Podcast Index results come first; Apple adds
+   only the shows Podcast Index didn't find (same Apple id, feed address, or title and author count
+   as the same show), each marked "via Apple". With no key, or when Podcast Index fails or finds
+   nothing, the list is Apple's. Apple asks apps to stay near 20 searches a minute, so searches run
+   only when Search is pressed, repeats come from a 15 minute memory, and a burst is held back. */
+var lastSearch = {q:"", pi:null, apple:null, piErr:"", appleErr:""};
+var appleMem = {}, appleCalls = [];
+function appleSearchSafe(q){
+  var k = q.toLowerCase(), m = appleMem[k];
+  if(m && Date.now()-m.at < 15*60*1000) return Promise.resolve(m.rs);
+  appleCalls = appleCalls.filter(function(t){ return Date.now()-t < 60000; });
+  if(appleCalls.length >= 15) return Promise.reject(new Error("busy"));
+  appleCalls.push(Date.now());
+  return appleSearch(q, 30).then(function(rs){ appleMem[k] = {at:Date.now(), rs:rs}; return rs; });
+}
+function sameShowKeys(sh){
+  return [sh.itunesId && "it:"+sh.itunesId, sh.feedUrl && "u:"+normUrl(sh.feedUrl),
+          sh.title && "ta:"+String(sh.title).toLowerCase().trim()+"|"+String(sh.author||"").toLowerCase().trim()].filter(Boolean);
+}
+function appleExtras(piRs, appleRs){
+  var seen = {}; (piRs||[]).forEach(function(sh){ sameShowKeys(sh).forEach(function(k){ seen[k] = 1; }); });
+  return (appleRs||[]).filter(function(sh){ return !sameShowKeys(sh).some(function(k){ return seen[k]; }); });
+}
 function renderSearch(top, view){
   top.appendChild(el("h1",{text:"Search"}));
   var input = el("input",{type:"search", id:"q", placeholder:"Show name or topic", value:lastSearch.q, autocomplete:"off", enterkeyhint:"search", "aria-label":"Search podcasts"});
   view.appendChild(el("form",{class:"search-box", onsubmit:function(ev){ ev.preventDefault(); input.blur(); doSearch(input.value); }},[ input, el("button",{class:"btn", type:"submit", text:"Search"}) ]));
   var out = el("section",{id:"results", style:"display:flex;flex-direction:column;gap:18px"}); view.appendChild(out);
   if(lastSearch.q) drawResults(out);
-  else out.appendChild(el("p",{class:"note", text: hasPI() ? "Searches Podcast Index first, then Apple Podcasts if you don't see the show. Both include video podcasts." : "Searching Apple Podcasts. Add your free Podcast Index key in Settings and it will search Podcast Index first."}));
+  else out.appendChild(el("p",{class:"note", text: hasPI() ? "Searches Podcast Index first. Apple Podcasts fills in any show Podcast Index doesn't have, marked “via Apple”. Both include video podcasts." : "Searching Apple Podcasts. Add your free Podcast Index key in Settings and it will search Podcast Index first, with Apple Podcasts as backup."}));
 }
+var searchBusy = 0;
 function doSearch(q){
   q = (q||"").trim(); if(!q) return;
-  lastSearch = {q:q, pi:null, apple:null, piErr:""};
+  if(lastSearch.q===q && Date.now()-searchBusy < 1500) return; // double tap on Search
+  searchBusy = Date.now();
+  lastSearch = {q:q, pi: hasPI()? null : [], apple:null, piErr:"", appleErr:""};
   var out = $("results"); out.innerHTML = ""; out.appendChild(el("div",{class:"spinner", role:"status", "aria-label":"Searching"}));
-  var first = hasPI() ? piSearch(q).then(function(rs){ lastSearch.pi = rs; if(!rs.length) return searchApple(); }, function(err){ lastSearch.piErr = err.message==="badkey" ? "Podcast Index turned down your key. Check it in Settings." : "Podcast Index didn't answer, so these are from Apple Podcasts."; lastSearch.pi = []; return searchApple(); })
-                      : searchApple();
-  first.then(function(){ if(lastSearch.q===q) drawResults($("results")); });
-}
-function searchApple(){
-  var q = lastSearch.q;
-  return appleSearch(q, 30).then(function(rs){ if(lastSearch.q===q) lastSearch.apple = rs; }, function(){ if(lastSearch.q===q) lastSearch.apple = "err"; });
+  var redraw = function(){ if(lastSearch.q===q) drawResults($("results")); };
+  var ap = appleSearchSafe(q).then(function(rs){ if(lastSearch.q===q) lastSearch.apple = rs; },
+    function(err){ if(lastSearch.q===q){ lastSearch.apple = "err"; lastSearch.appleErr = err.message==="busy" ? "Apple Podcasts asks apps to slow down. Try again in a minute." : ""; } });
+  if(!hasPI()){ ap.then(redraw); return; }
+  piSearch(q).then(function(rs){ if(lastSearch.q===q) lastSearch.pi = rs; },
+    function(err){ if(lastSearch.q===q){ lastSearch.piErr = err.message==="badkey" ? "Podcast Index turned down your key. Check it in Settings. These are from Apple Podcasts." : "Podcast Index didn't answer, so these are from Apple Podcasts."; lastSearch.pi = []; } })
+  .then(function(){
+    // Show Podcast Index results right away when it found some; Apple's extras follow.
+    if(lastSearch.q===q && lastSearch.pi.length && lastSearch.apple===null) redraw();
+    return ap;
+  }).then(redraw);
 }
 function drawResults(out){
   if(!out) return; out.innerHTML = "";
-  if(lastSearch.piErr) out.appendChild(el("p",{class:"status err", text:lastSearch.piErr}));
-  var block = function(label, rs){
-    var sec = el("div"); sec.appendChild(el("h2",{class:"section-label", text:label}));
-    if(rs==="err") sec.appendChild(el("p",{class:"status err", text:"That search didn't go through. Check your connection and try again."}));
-    else if(!rs.length) sec.appendChild(el("p",{class:"note", text:"No shows matched."}));
-    else { var ul = el("ul",{class:"show-list"}); rs.forEach(function(sh){ ul.appendChild(showRow(S.subs[sh.id]||sh)); }); sec.appendChild(ul); }
-    out.appendChild(sec);
-  };
-  if(lastSearch.pi && (lastSearch.pi.length || !lastSearch.piErr)) block("From Podcast Index", lastSearch.pi);
-  if(lastSearch.apple) block("From Apple Podcasts", lastSearch.apple);
-  else if(lastSearch.pi && lastSearch.pi.length){
-    out.appendChild(el("button",{class:"btn secondary", text:"Not here? Search Apple Podcasts too", onclick:function(){
-      this.disabled = true; this.textContent = "Searching Apple Podcasts…"; searchApple().then(function(){ drawResults($("results")); });
-    }}));
+  var ls = lastSearch, piRs = ls.pi||[], apple = ls.apple;
+  if(ls.piErr) out.appendChild(el("p",{class:"status err", text:ls.piErr}));
+  var list = function(rs, via){ var ul = el("ul",{class:"show-list"}); rs.forEach(function(sh){ ul.appendChild(showRow(S.subs[sh.id]||sh, false, via && via(sh))); }); return ul; };
+  var sec = el("div");
+  if(piRs.length){
+    var extras = Array.isArray(apple) ? appleExtras(piRs, apple) : [];
+    var all = piRs.concat(extras), viaSet = {}; extras.forEach(function(sh){ viaSet[sh.id] = 1; });
+    sec.appendChild(el("h2",{class:"section-label", text: extras.length ? "From Podcast Index and Apple Podcasts" : "From Podcast Index"}));
+    sec.appendChild(list(all, function(sh){ return !!viaSet[sh.id]; }));
+    if(apple===null) sec.appendChild(el("p",{class:"note", text:"Checking Apple Podcasts for anything Podcast Index missed…"}));
+    else if(apple==="err" && ls.appleErr) sec.appendChild(el("p",{class:"note", text:ls.appleErr}));
+  } else {
+    sec.appendChild(el("h2",{class:"section-label", text:"From Apple Podcasts"}));
+    if(apple===null) sec.appendChild(el("div",{class:"spinner", role:"status", "aria-label":"Searching"}));
+    else if(apple==="err") sec.appendChild(el("p",{class:"status err", text: ls.appleErr || "That search didn't go through. Check your connection and try again."}));
+    else if(!apple.length) sec.appendChild(el("p",{class:"note", text: hasPI() && !ls.piErr ? "No shows matched in Podcast Index or Apple Podcasts." : "No shows matched."}));
+    else sec.appendChild(list(apple, null));
   }
+  out.appendChild(sec);
 }
 
 /* ---------- Settings ---------- */
