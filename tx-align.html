@@ -1,0 +1,172 @@
+<!doctype html><meta charset="utf-8"><title>tx align</title><body><pre id="o">running</pre><script>
+var o=document.getElementById("o"),out=[];function log(s){out.push(s);o.textContent=out.join("\n");}
+function jsonp(u){return new Promise(function(res,rej){var n="cb"+Math.random().toString(36).slice(2);var s=document.createElement("script");var t=setTimeout(function(){rej(new Error("timeout"))},15000);window[n]=function(j){clearTimeout(t);res(j);s.remove();};s.onerror=function(){clearTimeout(t);rej(new Error("jsonp"))};s.src=u+"&callback="+n;document.body.appendChild(s);});}
+var MP3_BR1 = [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320], MP3_BR2 = [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
+var MP3_SR = {3:[44100,48000,32000], 2:[22050,24000,16000], 0:[11025,12000,8000]};
+var MK = null, MK_MAX = 250*1048576, MK_WIN = 30, MK_SR = 16000, MK_SLICE = 393216, mkW=null, mkCb={}, mkId=0;
+function txNote(){} function mkUI(){}
+var MK_JUNK = /^\s*[\[\(][^\]\)]*[\]\)]\s*$|^\s*[\u266a\u266b\s]*$/;
+function mp3Hdr(b, i){
+  if(i+4 > b.length || b[i]!==0xFF || (b[i+1]&0xE0)!==0xE0) return null;
+  var ver = (b[i+1]>>3)&3, lay = (b[i+1]>>1)&3; if(ver===1 || lay!==1) return null;
+  var bi = b[i+2]>>4, si = (b[i+2]>>2)&3, pad = (b[i+2]>>1)&1; if(bi===0 || bi===15 || si===3) return null;
+  var br = (ver===3?MP3_BR1:MP3_BR2)[bi], sr = MP3_SR[ver][si];
+  return {len:Math.floor((ver===3?144:72)*br*1000/sr)+pad, spf:ver===3?1152:576, sr:sr, br:br, ver:ver, mono:(b[i+3]>>6)===3};
+}
+function mp3Frames(b, from){
+  var i = from||0, out = [];
+  for(; i+4 < b.length; i++){
+    var h = mp3Hdr(b,i); if(!h) continue;
+    var h2 = mp3Hdr(b, i+h.len); if(!h2 && i+h.len+4 <= b.length) continue;
+    if(h2){ var h3 = mp3Hdr(b, i+h.len+h2.len); if(!h3 && i+h.len+h2.len+4 <= b.length) continue; }
+    break;
+  }
+  while(i+4 <= b.length){ var f = mp3Hdr(b,i); if(!f || i+f.len > b.length) break; out.push(i); i += f.len; }
+  return out;
+}
+function mkWorker(){
+  if(mkW) return mkW;
+  mkW = new Worker("tx-worker.js", {type:"module"});
+  mkW.onmessage = function(ev){
+    var m = ev.data || {};
+    if(m.type==="load"){ if(MK && !MK.dead){ MK.dl = m; mkUI(); } return; }
+    var cb = mkCb[m.id]; if(!cb) return; delete mkCb[m.id];
+    if(m.type==="error") cb.rej(new Error(m.msg||"error")); else cb.res(m);
+  };
+  mkW.onerror = function(ev){
+    var e = new Error("model: "+((ev && ev.message) || "the speech model wouldn't start")); e.model = true;
+    Object.keys(mkCb).forEach(function(id){ mkCb[id].rej(e); }); mkCb = {};
+    if(ev && ev.preventDefault) ev.preventDefault();
+    mkEnd();
+  };
+  return mkW;
+}
+function mkEnd(){ if(mkW){ try{ mkW.terminate(); }catch(e){} mkW = null; } Object.keys(mkCb).forEach(function(id){ mkCb[id].rej(new Error("stopped")); }); mkCb = {}; }
+function mkRun(audio){
+  return new Promise(function(res, rej){
+    var id = ++mkId; mkCb[id] = {res:res, rej:rej};
+    mkWorker().postMessage({type:"run", id:id, audio:audio}, [audio.buffer]);
+  });
+}
+function mkBytes(start, len){
+  var J = MK;
+  if(J.mem) return Promise.resolve(J.mem.subarray(start, Math.min(J.mem.length, start+len)));
+  var ctl = new AbortController(); J.ctl = ctl;
+  var to = setTimeout(function(){ ctl.abort(); }, 60000);
+  var get = function(url, plain){ return fetch(url, plain ? {mode:"cors", signal:ctl.signal} : {mode:"cors", headers:{Range:"bytes="+start+"-"+(start+len-1)}, signal:ctl.signal}); };
+  // Some hosts turn down a request for part of the file but allow a plain one for the whole file.
+  return get(J.url).catch(function(e){
+    if(J.dead) throw e;
+    if(J.url!==J.u0){ J.url = J.u0; return get(J.url); }
+    if(!J.got && !J.plain){ J.plain = true; return get(J.url, true); }
+    throw e;
+  }).then(function(r){
+    if(r.status===416){ clearTimeout(to); return new Uint8Array(0); }
+    if(r.status!==206 && r.status!==200){ clearTimeout(to); var e = new Error("http "+r.status); e.http = r.status; throw e; }
+    if(r.url) J.url = r.url;
+    var m = /\/(\d+)\s*$/.exec(r.headers.get("content-range")||""); if(m) J.size = +m[1];
+    if(r.status===200 && +(r.headers.get("content-length")||0) > MK_MAX){ ctl.abort(); clearTimeout(to); throw new Error("big"); }
+    return r.arrayBuffer().then(function(ab){
+      clearTimeout(to); J.got = true; if(!J.okd){ J.okd = true; txNote(J.sid, "ok"); }
+      if(r.status===200){ J.mem = new Uint8Array(ab); J.size = J.mem.length; return J.mem.subarray(start, Math.min(J.mem.length, start+len)); }
+      return new Uint8Array(ab);
+    });
+  }, function(e){ clearTimeout(to); throw e; });
+}
+function mkDecode(bytes){
+  var C = window.OfflineAudioContext || window.webkitOfflineAudioContext; if(!C) return Promise.reject(new Error("noaudio"));
+  if(!MK.ctx) MK.ctx = new C(1, 1, MK_SR);
+  var ctx = MK.ctx, buf = bytes.slice().buffer;
+  return new Promise(function(res, rej){ var p = ctx.decodeAudioData(buf, res, rej); if(p && p.then) p.then(res, rej); });
+}
+function mkCat(a, b){ var o = new Float32Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; }
+function mkHead(){
+  var J = MK;
+  return mkBytes(0, MK_SLICE).then(function(b){
+    if(b.length > 8 && String.fromCharCode(b[4],b[5],b[6],b[7])==="ftyp") throw new Error("format");
+    var start = 0;
+    if(b[0]===0x49 && b[1]===0x44 && b[2]===0x33) start = 10 + ((b[6]&127)<<21|(b[7]&127)<<14|(b[8]&127)<<7|(b[9]&127)) + ((b[5]&16)?10:0);
+    var more = start + 16384 > b.length ? mkBytes(start, 65536) : Promise.resolve(b.subarray(start));
+    return more.then(function(z){
+      var fr = mp3Frames(z, 0); if(fr.length < 3) throw new Error("format");
+      var h = mp3Hdr(z, fr[0]), first = z.subarray(fr[0], fr[0]+h.len), tag = false;
+      for(var i=4;i<Math.min(first.length-4, 60);i++){ var s = String.fromCharCode(first[i],first[i+1],first[i+2],first[i+3]); if(s==="Xing"||s==="Info"||s==="VBRI"){ tag = true; break; } }
+      J.h = h; J.off = start + fr[0] + (tag ? h.len : 0); J.cum = 0;
+    });
+  });
+}
+function mkBufSec(){ return MK.buf.length / MK_SR; }
+function mkFill(){
+  var J = MK;
+  if(J.dead || J.eof || mkBufSec() >= MK_WIN) return Promise.resolve();
+  var at = J.off;
+  return mkBytes(at, MK_SLICE).then(function(b){
+    if(J.dead) return;
+    var fr = mp3Frames(b, 0);
+    if(!fr.length){ J.eof = true; return; }
+    var lastF = mp3Hdr(b, fr[fr.length-1]), end = fr[fr.length-1] + lastF.len, n = fr.length;
+    if(b.length < MK_SLICE && end >= b.length - 4) J.eof = true;
+    if(J.size && at + end >= J.size - 4) J.eof = true;
+    var spf = J.h.spf, sr = J.h.sr, warmN = J.warm ? J.warmN : 0;
+    var bytes = J.warm ? (function(){ var o = new Uint8Array(J.warm.length + end - fr[0]); o.set(J.warm); o.set(b.subarray(fr[0], end), J.warm.length); return o; })() : b.subarray(fr[0], end);
+    J.sl.push({off:at + fr[0], cum:J.cum});
+    if(J.sl.length > 40) J.sl.shift();
+    var k = Math.max(0, n-2); J.warm = b.slice(fr[k], end); J.warmN = n - k;
+    J.off = at + end;
+    var from = Math.round(J.cum*MK_SR/sr), to = Math.round((J.cum + n*spf)*MK_SR/sr);
+    J.cum += n*spf;
+    return mkDecode(bytes).then(function(ab){
+      var ch = ab.numberOfChannels, len = ab.length, mono = new Float32Array(len), d;
+      for(var c=0;c<ch;c++){ d = ab.getChannelData(c); for(var i=0;i<len;i++) mono[i] += d[i]/ch; }
+      var skip = Math.round(warmN*spf*MK_SR/sr), want = to - from;
+      var part = mono.subarray(Math.min(skip, len), Math.min(skip + want, len));
+      if(part.length < want){ var pad = new Float32Array(want); pad.set(part); part = pad; }
+      return part;
+    }, function(){ J.bad = (J.bad||0) + 1; return null; }).then(function(part){
+      if(J.dead) return;
+      if(!part){ if(!J.good && J.bad >= 3) throw new Error("decode"); part = new Float32Array(to - from); } else J.good = (J.good||0) + 1;
+      // Continuing an unfinished transcript: drop the audio before the spot it stopped at.
+      if(J.skipTo > J.bufT){ var drop = Math.min(part.length, Math.round((J.skipTo - J.bufT)*MK_SR)); part = part.subarray(drop); J.bufT += drop/MK_SR; if(!part.length) return mkFill(); }
+      J.buf = mkCat(J.buf, part);
+      return mkFill();
+    });
+  });
+}
+function f2(x){return x.toFixed(2);}
+function step(){
+  var J = MK;
+  return mkFill().then(function(){
+    var n = Math.min(J.buf.length, MK_WIN*MK_SR);
+    var win = J.buf.slice(0, n), sec = n/MK_SR, last = J.eof && n===J.buf.length;
+    return mkRun(win).then(function(m){
+      log("window at "+f2(J.bufT)+" raw: "+(m.lines||[]).map(function(l){return "["+l.s+"-"+l.e+"] "+l.b.slice(0,40);}).join(" | "));
+      var lines = (m.lines||[]).filter(function(l){ return l.b && l.s!=null && l.s < sec; }), cut = sec;
+      if(!last && lines.length){
+        var tail = lines[lines.length-1];
+        if(tail.e==null || tail.e > sec - 1){ if(tail.s >= 5){ lines.pop(); cut = tail.s; } }
+        else if(tail.e >= 5) cut = tail.e;
+      }
+      lines.forEach(function(l){
+        if(MK_JUNK.test(l.b) || !/[0-9A-Za-z\u00C0-\u024F]/.test(l.b)) return;
+        var s = J.bufT + l.s, e = J.bufT + Math.min(l.e==null ? sec : l.e, sec);
+        J.segs.push([Math.round(s*100)/100, Math.round(Math.max(s, e)*100)/100, l.b]);
+      });
+      var drop = Math.round(cut*MK_SR); J.buf = J.buf.slice(drop); J.bufT += drop/MK_SR;
+    });
+  });
+}
+function srt(t){var cs=[];t.replace(/\r/g,"").split(/\n\n+/).forEach(function(b){var m=b.match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);if(!m)return;var s=+m[1]*3600+ +m[2]*60+ +m[3]+ +m[4]/1000,e=+m[5]*3600+ +m[6]*60+ +m[7]+ +m[8]/1000;cs.push([s,e,b.split("\n").slice(2).join(" ")]);});return cs;}
+(async function(){
+  var it=(location.search.match(/it=(\d+)/)||[])[1]||"1584274529", wins=+((location.search.match(/w=(\d+)/)||[])[1]||5);
+  var j=await jsonp("https://itunes.apple.com/lookup?id="+it+"&entity=podcastEpisode&limit=3");
+  var e=(j.results||[]).filter(function(x){return x.episodeUrl})[0]; log("ep: "+e.trackName);
+  var u=e.episodeUrl.replace(/^http:/,"https:");
+  MK={u0:u,url:u,segs:[],buf:new Float32Array(0),bufT:0,skipTo:0,sl:[]};
+  await mkHead(); log("head off="+MK.off+" sr="+MK.h.sr+" br="+MK.h.br);
+  for(var i=0;i<wins;i++){ await step(); }
+  log("SEGS:"); MK.segs.forEach(function(s){log(f2(s[0])+"-"+f2(s[1])+" "+s[2]);});
+  var tu=(location.search.match(/srt=([^&]+)/)||[])[1];
+  if(tu){ try{ var t=await (await fetch(decodeURIComponent(tu))).text(); log("SRT:"); srt(t).filter(function(c){return c[0]<MK.bufT;}).forEach(function(c){log(f2(c[0])+"-"+f2(c[1])+" "+c[2]);}); }catch(err){ log("srt fetch failed "+err); } }
+  log("DONE");
+})().catch(function(err){log("ERR "+err+" "+(err&&err.stack));});
+</script>
