@@ -159,8 +159,9 @@ function step(){
 function srt(t){var cs=[];t.replace(/\r/g,"").split(/\n\n+/).forEach(function(b){var m=b.match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);if(!m)return;var s=+m[1]*3600+ +m[2]*60+ +m[3]+ +m[4]/1000,e=+m[5]*3600+ +m[6]*60+ +m[7]+ +m[8]/1000;cs.push([s,e,b.split("\n").slice(2).join(" ")]);});return cs;}
 (async function(){
   var it=(location.search.match(/it=(\d+)/)||[])[1]||"1584274529", wins=+((location.search.match(/w=(\d+)/)||[])[1]||5);
-  var j=await jsonp("https://itunes.apple.com/lookup?id="+it+"&entity=podcastEpisode&limit=3");
-  var e=(j.results||[]).filter(function(x){return x.episodeUrl})[0]; log("ep: "+e.trackName);
+  var nm=decodeURIComponent((location.search.match(/n=([^&]+)/)||[])[1]||"");
+  var j=await jsonp("https://itunes.apple.com/lookup?id="+it+"&entity=podcastEpisode&limit=200");
+  var e=(j.results||[]).filter(function(x){return x.episodeUrl && (!nm || (x.trackName||"").indexOf(nm)>=0);})[0]; log("ep: "+e.trackName);
   var u=e.episodeUrl.replace(/^http:/,"https:");
   MK={u0:u,url:u,segs:[],buf:new Float32Array(0),bufT:0,skipTo:0,sl:[]};
   await mkHead(); log("head off="+MK.off+" sr="+MK.h.sr+" br="+MK.h.br);
