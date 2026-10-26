@@ -327,7 +327,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps"};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0};}
 var S = load();
 function load(){
   var s = null;
@@ -415,8 +415,21 @@ function subjects(){
 /* Episodes in a show's list not yet finished (partly played ones count). null until the list has loaded once. */
 function unheard(sh){
   var c = S.cache[sh.id]; if(!c || !(c.gs || c.eps)) return null;
-  return (c.gs || c.eps.map(function(e){ return e.g; })).filter(function(g){ return !isPlayed(g); });
+  return (c.eps ? capEps(c.eps).map(function(e){ return e.g; }) : capGs(c.gs)).filter(function(g){ return !isPlayed(g); });
 }
+/* Settings > Past episodes per show: only each show's newest N episodes appear in its lists, in a subject's
+   New to me list and in what plays next (0 = all of them). An episode you're partway through, the one
+   loaded in the player, and one you marked not played or chose to hear again always stay, however old. */
+var EP_CAPS = [5, 10, 25, 50, 0];
+function epCap(){ var n = parseInt(S.epCap, 10); return n > 0 ? n : 0; }
+function keepAnyway(g){ return !!(cur && cur.g===g) || (!isPlayed(g) && ((S.pos[g]||0) > 5 || +S.played[g] < 0)); }
+function capEps(eps){
+  var n = epCap(); if(!n || !eps || eps.length <= n) return eps || [];
+  var top = {}; byDate(eps, false).slice(0, n).forEach(function(e){ top[e.g] = 1; });
+  return eps.filter(function(e){ return top[e.g] || keepAnyway(e.g); });
+}
+// The bare id list is only left when storage ran short; it's in the feed's order, newest first.
+function capGs(gs){ var n = epCap(); if(!n || gs.length <= n) return gs; return gs.filter(function(g, i){ return i < n || keepAnyway(g); }); }
 function byDate(list, oldFirst){
   return list.map(function(e, i){ return {e:e, i:i, t:new Date(e.d).getTime()||0}; })
     .sort(function(a,b){ return (oldFirst ? a.t-b.t : b.t-a.t) || (oldFirst ? b.i-a.i : a.i-b.i); }).map(function(x){ return x.e; });
@@ -668,7 +681,7 @@ function queueEps(q){
   var seen = {}, groups = [];
   queueShows(q).forEach(function(sh){
     var c = S.cache[sh.id], mine = [];
-    ((c && c.eps) || []).forEach(function(e){ if(!isPlayed(e.g) && !seen[e.g]){ seen[e.g] = 1; mine.push(e); } });
+    capEps((c && c.eps) || []).forEach(function(e){ if(!isPlayed(e.g) && !seen[e.g]){ seen[e.g] = 1; mine.push(e); } });
     if(!mine.length) return;
     mine = byDate(mine, true);
     groups.push({eps:mine, t:new Date(mine[mine.length-1].d).getTime()||0, title:sh.title||""});
@@ -834,13 +847,15 @@ function renderShow(top, view, id){
   });
 }
 /* The episode list on a show page: Recent (everything in the list) or New to me (not finished yet),
-   newest or oldest first. Both choices are remembered; the sort order also syncs. */
-function drawEps(wrap, eps, sh, count, keepScroll){
+   newest or oldest first. Both choices are remembered; the sort order also syncs. With a limit set in
+   Settings, both tabs hold the newest episodes only, until Show older episodes opens the rest for this visit. */
+function drawEps(wrap, allEps, sh, count, keepScroll, older){
   var st = $("scroller").scrollTop;
   wrap.innerHTML = "";
   var tab = S.epTab==="new" ? "new" : "recent", oldFirst = S.epSort==="old";
+  var eps = older ? allEps : capEps(allEps), hiddenOld = allEps.length - eps.length;
   var fresh = eps.filter(function(e){ return !isPlayed(e.g); });
-  var redraw = function(n){ drawEps(wrap, eps, sh, n || shown, true); };
+  var redraw = function(n, o){ drawEps(wrap, allEps, sh, n || shown, true, o===undefined ? older : o); };
   var seg = el("div",{class:"seg", role:"group", "aria-label":"Which episodes"},[
     el("button",{"aria-pressed":String(tab==="recent"), text:"Recent", onclick:function(){ S.epTab = "recent"; save(); redraw(20); }}),
     el("button",{"aria-pressed":String(tab==="new"), text:"New to me"+(fresh.length? " ("+fresh.length+")" : ""), onclick:function(){ S.epTab = "new"; save(); redraw(20); }})
@@ -851,7 +866,8 @@ function drawEps(wrap, eps, sh, count, keepScroll){
   var n = eps.filter(function(e){return e.v;}).length;
   var info = el("div",{class:"ep-info"});
   if(tab==="recent"){
-    info.appendChild(el("p",{class:"note", text:eps.length+" recent episodes"+(n? " · "+n+" video":"")+" · "+fresh.length+" new to you"}));
+    var extra = hiddenOld ? eps.length - epCap() : 0;
+    info.appendChild(el("p",{class:"note", text:(hiddenOld ? "Newest "+epCap()+" episodes"+(extra>0 ? ", plus "+extra+" older one"+(extra===1?"":"s")+" you're partway through or chose to hear again" : "")+". Your limit is in Settings." : eps.length+" recent episodes")+(n? " · "+n+" video":"")+" · "+fresh.length+" new to you"}));
   } else if(list.length){
     info.appendChild(el("p",{class:"note", text:list.length+" episode"+(list.length===1?"":"s")+" you haven't finished. Played ones are left out."}));
     var armed = false;
@@ -864,6 +880,7 @@ function drawEps(wrap, eps, sh, count, keepScroll){
   wrap.appendChild(info);
   if(!list.length){
     wrap.appendChild(el("p",{class:"empty", text: tab==="new" ? "You've played every episode in this list. They're all still under Recent." : "No episodes found for this show."}));
+    if(hiddenOld) wrap.appendChild(el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show "+hiddenOld+" older episode"+(hiddenOld===1?"":"s"), onclick:function(){ redraw(20, true); }}));
     if(keepScroll) $("scroller").scrollTop = st;
     return;
   }
@@ -872,6 +889,8 @@ function drawEps(wrap, eps, sh, count, keepScroll){
   var more = el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show more episodes", onclick:function(){ addEps(20); }});
   function addEps(k){ list.slice(shown, shown+k).forEach(function(e){ ul.appendChild(epRow(e, sh, tab, function(){ redraw(); })); }); shown += k; more.hidden = shown >= list.length; }
   wrap.appendChild(more); addEps(Math.max(20, count||0));
+  if(hiddenOld) wrap.appendChild(el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show "+hiddenOld+" older episode"+(hiddenOld===1?"":"s"), onclick:function(){ redraw(shown, true); }}));
+  else if(older && capEps(allEps).length < allEps.length) wrap.appendChild(el("button",{class:"btn secondary", style:"margin-top:12px", text:"Show only the newest "+epCap()+" again", onclick:function(){ redraw(20, false); }}));
   if(keepScroll) $("scroller").scrollTop = st;
 }
 function showSettings(sh){
@@ -1322,6 +1341,13 @@ function renderSettings(top, view){
     ]),
     el("p",{id:"remoteNote", text:remoteText()}),
     el("p",{text:"The next one comes from the list you started from. In a subject that's its New to me list, which plays each show's episodes oldest first, then the next show. On a show's page it's that show's next unfinished episode, oldest first. The sleep timer's End of episode setting still stops at the end. Each show also has its own Skip at start and Skip at end setting on its page."})
+  ]));
+  var capSel = el("select",{id:"capSel"}, EP_CAPS.map(function(v){ return el("option",{value:String(v), text: v ? "Newest "+v : "All of them", selected:v===epCap()}); }));
+  capSel.onchange = function(){ S.epCap = parseInt(this.value,10)||0; save(); };
+  view.appendChild(el("div",{class:"card"},[
+    el("h3",{text:"Episode lists"}),
+    el("div",{class:"form-grid"},[ el("label",{class:"field", for:"capSel"},[ "Past episodes per show", capSel ]) ]),
+    el("p",{text:"Keeps each show's Recent and New to me lists to its newest episodes, so a show you just followed doesn't fill them with its whole back catalog. Subjects and what plays next use the same limit. An episode you're partway through, or one you chose to hear again, always stays. A show's page has a button to see its older episodes."})
   ]));
   var trimSel = el("select",{id:"trimSel"},[ el("option",{value:"0", text:"Off", selected:!S.trim}), el("option",{value:"1", text:"On", selected:!!S.trim}) ]);
   trimSel.onchange = function(){ S.trim = this.value==="1"; save(); trimStart(); };
@@ -2248,7 +2274,7 @@ function dbxUpload(data, rev, keepalive){
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
   return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
-    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext}};
+    prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext, epCap:S.epCap}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
 function stable(v){
@@ -2316,7 +2342,7 @@ function mergeSync(base, local, remote, fresh){
   [L.played, R.played].forEach(function(o){ Object.keys(o).forEach(function(g){ var t = o[g]===true ? 1 : +o[g]||1; if(out.played[g]==null || Math.abs(t) > Math.abs(out.played[g])) out.played[g] = t; }); });
   [L.hideSugg, R.hideSugg].forEach(function(o){ Object.keys(o).forEach(function(id){ out.hideSugg[id] = 1; }); });
 
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap"].forEach(function(k){ var v = pick3(B.prefs[k], L.prefs[k], R.prefs[k], preferLocal); if(v!==undefined) out.prefs[k] = v; });
 
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
@@ -2332,7 +2358,7 @@ function applyMerged(m){
   var prefsBefore = stable(snap().prefs);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
   normAll(S.subs);
-  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
+  ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
   // The episode last played anywhere becomes the one loaded here, unless this device is playing right now.
   var idle = !cur || media.paused;
   if(idle && m.now && m.now.u && (m.nowT > (S.nowT||0) || !S.now)){
