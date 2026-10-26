@@ -100,7 +100,26 @@ img{max-width:100%;display:block}
 .ep .title{font-weight:600;background:none;border:0;padding:0;text-align:left}
 .ep .ep-show{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:2px}
 .ep.played .title{color:var(--muted);font-weight:500}
-.ep .desc{grid-column:1/-1;font-size:14px;color:var(--muted);white-space:pre-line;overflow-wrap:anywhere}
+.ep .title .more{display:inline-block;margin-left:6px;color:var(--muted);font-weight:700;transition:transform .15s}
+.ep.open .title .more{transform:rotate(90deg)}
+.ep .snip{grid-column:1/-1;font-size:14px;line-height:1.4;color:var(--muted);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.ep .ep-details{grid-column:1/-1;display:flex;flex-direction:column;gap:12px;background:var(--surface);border-radius:12px;padding:12px 14px;margin-top:4px}
+.ep .ep-details[hidden]{display:none}
+.ep .facts{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:14px}
+.ep .facts div{display:contents}
+.ep .facts dt{color:var(--muted)}
+.ep .facts dd{margin:0;overflow-wrap:anywhere}
+.ep .chapters h4,.ep .notes h4{margin:0 0 6px;font-size:15px}
+.ep .chapters ol{margin:0;padding-left:0;list-style:none;font-size:14px;display:flex;flex-direction:column;gap:3px}
+.ep .chapters .t{color:var(--muted);font-variant-numeric:tabular-nums;display:inline-block;min-width:3.6em}
+.ep .notes{font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+.ep .notes.plain{white-space:pre-line}
+.ep .notes p,.ep .notes div,.ep .notes ul,.ep .notes ol,.ep .notes blockquote{margin:0 0 .6em}
+.ep .notes ul,.ep .notes ol{padding-left:20px}
+.ep .notes blockquote{padding-left:10px;border-left:3px solid var(--line);color:var(--muted)}
+.ep .notes hr{border:0;border-top:1px solid var(--line);margin:.6em 0}
+.ep .notes a{color:var(--accent);text-decoration:underline}
+.ep .hide-details{align-self:flex-start}
 .badge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px;text-transform:uppercase}
 .badge.video{background:rgba(124,196,232,.16);color:var(--video)}
 .badge.left{background:rgba(242,169,59,.14);color:var(--accent)}
@@ -218,6 +237,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
 /* Episode tabs, sort and listened marks */
 .ep-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .seg{display:flex;flex:1 1 220px;background:var(--surface);border-radius:12px;padding:3px;gap:3px}
+.view > .seg{flex:none}
 .seg button{flex:1;border:0;background:none;border-radius:9px;padding:8px 10px;min-height:40px;font-size:15px;font-weight:600;color:var(--muted);white-space:nowrap}
 .seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--fg)}
 .ep-info{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px}
@@ -404,6 +424,69 @@ function plain(html){
   if(!html) return "";
   try{ var d = new DOMParser().parseFromString("<div>"+String(html).replace(/<(br|\/p|\/li)\s*\/?>/gi,"\n$&")+"</div>","text/html"); return (d.body.textContent||"").replace(/\n{3,}/g,"\n\n").trim(); }catch(e){ return String(html); }
 }
+/* Episode notes. The full notes as the show wrote them are kept in memory only (the saved copy keeps
+   a short plain-text version to save space). They're shown through a cleaner that rebuilds them from
+   an allowed list: text, paragraphs, lists, bold and italics, and web links that open in a new tab.
+   Scripts, styles, pictures, frames and forms are left out. */
+var NOTES = {}, notesTried = {};
+function keepNotes(g, html, base){ if(g && html) NOTES[g] = {h:String(html).slice(0, 60000), b:base||""}; }
+var NOTE_DROP = /^(script|style|iframe|frame|frameset|object|embed|applet|svg|math|template|noscript|form|input|button|select|option|textarea|head|title|meta|link|base|video|audio|source|track|canvas|picture|img|map|area)$/;
+var NOTE_TAG = {p:"p", br:"br", a:"a", b:"strong", strong:"strong", i:"em", em:"em", u:"u", ul:"ul", ol:"ol", li:"li", blockquote:"blockquote",
+  h1:"h4", h2:"h4", h3:"h4", h4:"h4", h5:"h4", h6:"h4", pre:"p", hr:"hr", div:"div", tr:"div", section:"div", article:"div", dt:"div", dd:"div", code:"code"};
+// A second address glued onto the first (feeds that lose their line breaks) starts a new link.
+var URL_RE = /\bhttps?:\/\/(?:(?!https?:\/\/)[^\s<>"'])*(?:(?!https?:\/\/)[^\s<>"'.,;:!?)\]}])/gi;
+function shortUrl(u){ var t = u.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, ""); return t.length > 42 ? t.slice(0, 40)+"…" : t; }
+// Links the show wrote relative to its own site are completed from the episode's page or the feed.
+function safeHref(h, base){ h = String(h||"").trim(); if(!h || h.charAt(0)==="#") return ""; try{ h = new URL(h, base || undefined).href; }catch(e){} return /^(https?:\/\/|mailto:)/i.test(h) ? h : ""; }
+function noteLink(href, kids){ var a = el("a",{href:href, target:"_blank", rel:"noopener noreferrer"}); kids.forEach(function(k){ a.appendChild(k); }); return a; }
+// Plain web addresses in the text become links too.
+function noteText(dst, text, inLink){
+  if(inLink){ dst.appendChild(document.createTextNode(text)); return; }
+  var at = 0; text.replace(URL_RE, function(m, i){
+    if(i > at) dst.appendChild(document.createTextNode(text.slice(at, i)));
+    else if(i && i===at) dst.appendChild(document.createTextNode(" "));
+    dst.appendChild(noteLink(m, [document.createTextNode(shortUrl(m))])); at = i + m.length; return m;
+  });
+  if(at < text.length) dst.appendChild(document.createTextNode(text.slice(at)));
+}
+function noteWalk(src, dst, inLink, depth, base){
+  if(depth > 40) return;
+  Array.prototype.forEach.call(src.childNodes, function(n){
+    if(n.nodeType===3){ noteText(dst, n.nodeValue, inLink); return; }
+    if(n.nodeType!==1) return;
+    var tag = n.nodeName.toLowerCase();
+    if(NOTE_DROP.test(tag)) return;
+    var to = NOTE_TAG[tag];
+    if(to==="a"){
+      var href = safeHref(n.getAttribute("href"), base);
+      if(!href || inLink){ noteWalk(n, dst, inLink, depth+1, base); return; }
+      var a = noteLink(href, []); noteWalk(n, a, true, depth+1, base); if(!a.textContent.trim()) a.textContent = href; dst.appendChild(a); return;
+    }
+    if(!to){ noteWalk(n, dst, inLink, depth+1, base); return; }
+    var out = document.createElement(to); dst.appendChild(out);
+    if(to!=="br" && to!=="hr") noteWalk(n, out, inLink, depth+1, base);
+  });
+}
+function notesBox(note){
+  var box = el("div",{class:"notes"});
+  var raw = String((note && note.h)||"").trim(), base = (note && note.b) || "";
+  if(!/<[a-z!\/][^>]*>/i.test(raw)){
+    // Plain text: keep its line breaks. Some feeds send their HTML escaped twice, so look again once.
+    var d0 = new DOMParser().parseFromString("<div>"+raw.replace(/</g,"&lt;")+"</div>","text/html").body.textContent || "";
+    if(/<[a-z\/][^>]*>/i.test(d0)) raw = d0;
+    else { raw.split(/\r?\n/).forEach(function(line, i){ if(i) box.appendChild(el("br")); noteText(box, plainEnt(line), false); }); return box; }
+  }
+  try{ var doc = new DOMParser().parseFromString(raw, "text/html"); noteWalk(doc.body, box, false, 0, base); }
+  catch(e){ box.textContent = plain(raw); }
+  // Drop empty paragraphs the feed left behind.
+  Array.prototype.slice.call(box.querySelectorAll("p,div,li,h4")).forEach(function(n){ if(!n.textContent.trim() && !n.querySelector("br,hr")) n.remove(); });
+  return box;
+}
+function plainEnt(t){ return /&[#a-z0-9]+;/i.test(t) ? (new DOMParser().parseFromString("<div>"+t.replace(/</g,"&lt;")+"</div>","text/html").body.textContent || t) : t; }
+function fmtLong(iso){
+  var d = new Date(iso); if(isNaN(d)) return "";
+  return d.toLocaleDateString(undefined, {weekday:"short", month:"short", day:"numeric", year:"numeric"})+" at "+d.toLocaleTimeString(undefined, {hour:"numeric", minute:"2-digit"});
+}
 function toast(msg){ var t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(function(){t.hidden=true;},2600); }
 function normUrl(u){ return String(u||"").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/^www\./,"").replace(/\/+$/,""); }
 function bigArt(u){ return u ? String(u).replace(/\/\d+x\d+bb\./, "/600x600bb.") : ""; }
@@ -503,6 +586,7 @@ function fetchPIEps(show){
     if(!show.piId && items[0].feedId){ show.piId = items[0].feedId; }
     return items.filter(function(i){return i.enclosureUrl;}).map(function(i){
       var tr = (i.transcripts && i.transcripts.length) ? i.transcripts.map(function(t){return {url:t.url, type:t.type||""};}) : (i.transcriptUrl? [{url:i.transcriptUrl, type:""}] : []);
+      keepNotes(String(i.guid||i.enclosureUrl).trim(), i.description, i.link || show.feedUrl);
       return {g:String(i.guid||i.enclosureUrl).trim(), s:show.id, t:i.title||"Episode", d:i.datePublished? new Date(i.datePublished*1000).toISOString() : "",
         u:i.enclosureUrl, v:isVideo(i.enclosureType, i.enclosureUrl), ty:i.enclosureType||"", len:i.duration||0, x:plain(i.description||"").slice(0,1500),
         a:i.image||i.feedImage||"", ch:i.chaptersUrl||"", tr:tr};
@@ -515,6 +599,7 @@ function fetchAppleEps(show){
     var head = rs.filter(function(r){return r.kind==="podcast";})[0];
     if(head){ if(!show.feedUrl && head.feedUrl) show.feedUrl = head.feedUrl; if(head.artworkUrl600 && !show.art) show.art = bigArt(head.artworkUrl600); }
     var eps = rs.filter(function(r){return r.wrapperType==="podcastEpisode" && r.episodeUrl;}).map(function(r){
+      keepNotes(String(r.episodeGuid||r.episodeUrl).trim(), r.description||r.shortDescription);
       return {g:String(r.episodeGuid||r.episodeUrl).trim(), s:show.id, t:r.trackName||"Episode", d:r.releaseDate, u:r.episodeUrl,
         v:isVideo(r.episodeContentType, r.episodeUrl), ty:r.episodeContentType||"", len:r.trackTimeMillis? r.trackTimeMillis/1000 : 0,
         x:plain(r.description||r.shortDescription||"").slice(0,1500), a:bigArt(r.artworkUrl600||r.artworkUrl160||""), ch:"", tr:null};
@@ -530,10 +615,10 @@ function fetchRssEps(show){
     var x = new DOMParser().parseFromString(txt, "application/xml");
     var ch = x.querySelector("channel");
     if(ch && !show.art){ var img = ch.querySelector("image > url"); var it = ch.getElementsByTagNameNS("*","image")[0]; show.art = (it && it.getAttribute("href")) || (img && img.textContent) || ""; }
-    return rssItems(x, show.id);
+    return rssItems(x, show.id, show.feedUrl);
   });
 }
-function rssItems(x, sid){
+function rssItems(x, sid, base){
   return Array.prototype.slice.call(x.querySelectorAll("item")).map(function(item){
     var enc = item.querySelector("enclosure"); if(!enc) return null;
     var u = enc.getAttribute("url"); var g = item.querySelector("guid");
@@ -542,6 +627,9 @@ function rssItems(x, sid){
     var title = item.querySelector("title"); var date = item.querySelector("pubDate"); var desc = item.querySelector("description");
     var tr = Array.prototype.map.call(item.getElementsByTagNameNS("*","transcript"), function(t){ return {url:t.getAttribute("url"), type:t.getAttribute("type")||""}; }).filter(function(t){return t.url;});
     var chEl = item.getElementsByTagNameNS("*","chapters")[0];
+    var full = item.getElementsByTagNameNS("*","encoded")[0];
+    var link = Array.prototype.filter.call(item.children, function(c){ return c.nodeName==="link"; })[0];
+    keepNotes(String((g&&g.textContent.trim())||u).trim(), (full && full.textContent.trim()) || (desc && desc.textContent) || "", (link && link.textContent.trim()) || base);
     return {g:String((g&&g.textContent.trim())||u).trim(), s:sid, t:title?title.textContent:"Episode", d:date?new Date(date.textContent).toISOString():"",
       u:u, v:isVideo(enc.getAttribute("type"), u), ty:enc.getAttribute("type")||"", len:dur, x:plain(desc?desc.textContent:"").slice(0,1500), a:"", ch: chEl? chEl.getAttribute("url")||"" : "", tr:tr};
   }).filter(Boolean);
@@ -982,7 +1070,16 @@ function epRow(e, sh, tab, onMark, q){
   if(len) when.appendChild(document.createTextNode("· "+fmtDur(len)));
   if(e.v) when.appendChild(el("span",{class:"badge video", text:"Video"}));
   if(e.tr && e.tr.length) when.appendChild(el("span",{class:"badge done", text:"Transcript"}));
-  var desc = el("div",{class:"desc", text:e.x||""}); desc.hidden = true;
+  // A two-line taste of the notes; tapping the title opens the full details right in the list.
+  var snipText = (e.x||"").replace(/\s+/g," ").trim();
+  var snip = snipText ? el("div",{class:"snip", text:snipText}) : null;
+  var details = el("div",{class:"ep-details"}); details.hidden = true;
+  var titleBtn = el("button",{class:"title", "aria-expanded":"false", onclick:function(){ setOpen(details.hidden); }},[ e.t, el("span",{class:"more", "aria-hidden":"true", text:"›"}) ]);
+  function setOpen(on){
+    if(on){ openEps[e.g] = 1; fillDetails(details, e, sh, function(){ setOpen(false); }); } else delete openEps[e.g];
+    details.hidden = !on; if(snip) snip.hidden = on;
+    titleBtn.setAttribute("aria-expanded", String(on)); li.classList.toggle("open", on);
+  }
   var mark = el("button",{class:"icon-btn plain mark"+(played?" on":""), "aria-pressed":String(played), "aria-label": played ? "Played. Tap to mark "+e.t+" as not played" : "Mark "+e.t+" as played", html:ICON.check, onclick:function(){
     setPlayed(e.g, !played); save(); toast(played ? "Marked as not played" : "Marked as played"); if(onMark) onMark();
   }});
@@ -991,12 +1088,63 @@ function epRow(e, sh, tab, onMark, q){
     setPlayed(e.g, false); delete S.pos[e.g]; S.posT[e.g] = Date.now(); save(); toast("Back in New to me"+(catsOf(sh).length ? " and in "+catsOf(sh).join(" and ") : "")); if(onMark) onMark();
   }}) : null;
   var li = el("li",{class:"ep"+(played?" played":"")},[
-    el("div",null,[ q && q.c ? el("div",{class:"ep-show", text:sh.title}) : null, when, el("button",{class:"title", text:e.t, "aria-expanded":"false", onclick:function(){ desc.hidden=!desc.hidden; this.setAttribute("aria-expanded", String(!desc.hidden)); }}) ]),
+    el("div",null,[ q && q.c ? el("div",{class:"ep-show", text:sh.title}) : null, when, titleBtn ]),
     el("div",{class:"ep-acts"},[ again, mark, el("button",{class:"play-btn"+(cur && cur.g===e.g?"":" ghost"), "aria-label":"Play "+e.t, html:ICON.play, onclick:function(){ e.a = e.a || sh.art; playEp(e, true, q || {s:sh.id}); }}) ]),
-    desc
+    snip, details
   ]);
   if(pos>5 && len && !played) li.appendChild(el("div",{class:"prog"},[ el("i",{style:"width:"+Math.min(100, pos/len*100).toFixed(1)+"%"}) ]));
+  if(openEps[e.g]) setOpen(true);
   return li;
+}
+/* Which episodes have their details open, so marking one played or loading more keeps them open. This visit only. */
+var openEps = {};
+/* The full details under an episode: show, date and time, length, where you stand, video or audio,
+   transcript and chapters, then the show notes. Full notes are loaded again from the show when only
+   the short saved copy is on hand. */
+function fillDetails(box, e, sh, close){
+  box.innerHTML = "";
+  var pos = S.pos[e.g]||0, played = isPlayed(e.g), len = e.len || (S.pos[e.g+"#len"]||0);
+  var facts = [];
+  var fact = function(k, v){ if(v) facts.push(el("div",null,[ el("dt",{text:k}), el("dd",{text:v}) ])); };
+  fact("Show", sh.title||"");
+  fact("Published", fmtLong(e.d));
+  fact("Length", len ? fmtDur(len) : "");
+  fact("Where you are", played ? "Played" : pos>5 ? (len ? fmtDur(Math.max(60, len-pos))+" left, from "+fmt(pos) : "Stopped at "+fmt(pos)) : "Not started");
+  fact("Type", e.v ? "Video" : "Audio");
+  if(e.tr && e.tr.length) fact("Transcript", "Yes. Play it, then tap Transcript in the player.");
+  box.appendChild(el("dl",{class:"facts"}, facts));
+  var chBox = null;
+  if(e.ch){ chBox = el("div",{class:"chapters"},[ el("h4",{text:"Chapters"}), el("p",{class:"note", text:"Loading chapters…"}) ]); box.appendChild(chBox); loadChapterList(e, chBox); }
+  var notesWrap = el("div"); box.appendChild(notesWrap);
+  var drawNotes = function(loading){
+    notesWrap.innerHTML = "";
+    var raw = NOTES[e.g];
+    if(raw) notesWrap.appendChild(notesBox(raw));
+    else if(e.x) notesWrap.appendChild(el("div",{class:"notes plain", text:e.x}));
+    else notesWrap.appendChild(el("p",{class:"note", text: loading ? "Loading the show notes…" : "This episode has no show notes."}));
+    if(loading && (raw || e.x) && !NOTES[e.g]) notesWrap.appendChild(el("p",{class:"note", text:"Loading the full notes…"}));
+  };
+  var canFetch = !NOTES[e.g] && sh && sh.id && !notesTried[sh.id] && (S.subs[sh.id] || tempShows[sh.id]);
+  drawNotes(!!canFetch);
+  if(canFetch){
+    notesTried[sh.id] = 1;
+    episodesFor(sh, true).then(function(){ if(box.isConnected) drawNotes(false); }, function(){ if(box.isConnected) drawNotes(false); });
+  }
+  box.appendChild(el("button",{class:"pill-btn hide-details", text:"Hide details", onclick:close}));
+}
+var chapterLists = {};
+function loadChapterList(e, box){
+  var put = function(list){
+    box.innerHTML = ""; box.appendChild(el("h4",{text:"Chapters"}));
+    if(!list || !list.length){ box.appendChild(el("p",{class:"note", text: list ? "The chapter list is empty." : "Couldn't load the chapters."})); return; }
+    var ol = el("ol"); list.forEach(function(c){ ol.appendChild(el("li",null,[ el("span",{class:"t", text:fmt(c.startTime||0)}), document.createTextNode(" "+(c.title||"Chapter")) ])); });
+    box.appendChild(ol);
+  };
+  if(chapterLists[e.ch]){ put(chapterLists[e.ch]); return; }
+  fetch(e.ch).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
+    var list = (j.chapters||[]).filter(function(c){ return c && c.toc!==false; }).sort(function(a,b){ return (a.startTime||0)-(b.startTime||0); });
+    chapterLists[e.ch] = list; put(list);
+  }).catch(function(){ put(null); });
 }
 
 /* ---------- Quiet shows: no new episode in a year, offered for unfollowing ---------- */
