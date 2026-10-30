@@ -16,7 +16,7 @@ Not in this build yet: search, transcripts, skip and highlight words, pause trim
 1. Download this repository (Code, then Download ZIP) and unzip it.
 2. Open `ios/N5PREcaster.xcodeproj` in Xcode.
 3. Xcode, Settings, Accounts: add your Apple ID if it isn't there.
-4. Click the blue N5PREcaster project at the top of the left column, then the N5PREcaster target, then Signing & Capabilities. Set Team to your Personal Team. If Xcode says the bundle identifier isn't available, change it to something of your own, such as `com.yourname.N5PREcaster`.
+4. Click the blue N5PREcaster project at the top of the left column, then the N5PREcaster target, then Signing & Capabilities. Set Team to your Personal Team. Leave the Bundle Identifier as `com.n5pre.N5PREcaster`. Each new build then replaces the app already on the iPhone. A different identifier installs a second copy with its own icon.
 5. Plug in the iPhone, unlock it and tap Trust. On the iPhone, turn on Settings, Privacy & Security, Developer Mode, and let it restart.
 6. Pick the iPhone at the top of the Xcode window and press Run.
 7. If the iPhone says Untrusted Developer: Settings, General, VPN & Device Management, tap your Apple ID, Trust. Then Run again.
