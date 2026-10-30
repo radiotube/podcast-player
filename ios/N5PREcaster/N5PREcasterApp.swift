@@ -23,6 +23,8 @@ struct N5PREcasterApp: App {
                 .environmentObject(dropbox)
                 .environmentObject(library)
                 .environmentObject(player)
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
         }
         .onChange(of: phase) { _, newPhase in
             if newPhase == .background { player.savePosition() }

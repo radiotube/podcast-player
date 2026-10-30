@@ -133,6 +133,11 @@ final class Library: ObservableObject {
 
     // MARK: Episodes
 
+    /// The newest episode not heard yet, once the show's list has loaded.
+    func latestUnheard(_ show: Show) -> Episode? {
+        episodes[show.id]?.first { !isPlayed($0.guid) }
+    }
+
     func loadEpisodes(_ show: Show, force: Bool = false) async {
         if !force, let list = episodes[show.id], !list.isEmpty { return }
         if loading.contains(show.id) { return }
