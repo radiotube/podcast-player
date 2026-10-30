@@ -375,7 +375,7 @@ var MUSIC_RE = /\b(music|drama|fiction|performing arts)\b/i, OTR_RE = /old[- ]ti
 var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\b/i;
 
 /* ---------- storage ---------- */
-function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[], dbxBase:null, mkAuto:"", mkAutoPaused:false, mkAutoNo:{}, txHits:{}};}
+function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[], dbxBase:null, mkAuto:"", mkAutoPaused:false, mkAutoNo:{}, txHits:{}, dbxMaster:0};}
 var S = load();
 function load(){
   var s = null, raw = null;
@@ -3321,7 +3321,20 @@ function lsGet(k){ try{ return JSON.parse(localStorage.getItem(k)||"null"); }cat
 function lsSet(k, v){ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
 function dbxKey(){ var o = null; try{ o = localStorage.getItem("pp.dbx.key"); }catch(e){} return DBX_APP_KEY || o || ""; }
 var dbx = lsGet(DBX_AUTH);
-var sync = {busy:null, again:false, timer:null, msg:"", err:false, at:0, sent:"", orphan:""};
+var sync = {busy:null, again:false, timer:null, msg:"", err:false, at:0, sent:"", orphan:"", rev:"", by:"", byAt:""};
+var APP_VER = 45;
+/* A short name for this browser, written into sync.json so it's clear which device saved Dropbox's copy last. */
+function deviceLabel(){
+  var u = navigator.userAgent||"", mobile = /iPhone|iPod/.test(u) ? "iPhone" : (/iPad/.test(u) || (/Macintosh/.test(u) && navigator.maxTouchPoints > 1)) ? "iPad" : /Android/.test(u) ? "Android" : "";
+  if(mobile) return mobile+(navigator.standalone===true ? " Home Screen app" : " browser");
+  var os = /Mac/.test(u) ? "Mac" : /Windows/.test(u) ? "Windows" : /Linux|CrOS/.test(u) ? "computer" : "computer";
+  var b = navigator.brave ? "Brave" : /Edg\//.test(u) ? "Edge" : /Firefox\//.test(u) ? "Firefox" : /Chrome\//.test(u) ? "Chrome" : /Safari\//.test(u) ? "Safari" : "browser";
+  return b+" on "+os;
+}
+function listSummary(d){
+  var sm = copySummary(d||{}); sm.favs = ((d && d.fav)||[]).filter(function(id){ return d.subs && d.subs[id]; }).length; return sm;
+}
+function sumText(sm){ return sm.shows+" show"+(sm.shows===1?"":"s")+", "+sm.cats+" subject"+(sm.cats===1?"":"s")+", "+sm.favs+" favorite"+(sm.favs===1?"":"s"); }
 function dbxRedirect(){ return location.origin + location.pathname.replace(/index\.html$/,""); }
 /* The iPhone and iPad Home Screen app can't count on coming back from a sign-in page,
    so there Dropbox shows a code to paste instead. */
@@ -3618,22 +3631,98 @@ function runSync(tries, keepalive){
     var base = getBase();
     var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
     var local = copy(snap());
+    if(remote){ sync.rev = remote.rev; sync.by = (rd && rd.by)||""; sync.byAt = (rd && rd.at)||""; }
+    // Another device chose its list to be the one everywhere since this device last looked. Its shows,
+    // subjects, favorites and settings are taken as they are; only listening spots and played marks
+    // still merge, newest first. Changes made here before that aren't kept.
+    var mark = rd ? +rd.master||0 : 0, take = mark > (+S.dbxMaster||0);
+    if(take){
+      ["subs","fav","unf","keep","hideSugg","prefs"].forEach(function(k){ local[k] = copy(rd[k]); });
+      base = pickSnap(rd);
+    }
     var merged = rd ? mergeSync(base, local, rd, !base && isFresh()) : local;
     // Last guard: never send Dropbox a copy missing shows it has, unless they were unfollowed.
     var lost = rd ? Object.keys(rd.subs||{}).filter(function(id){ return !merged.subs[id] && !(merged.unf && merged.unf[id]); }) : [];
     if(lost.length){ var ge = new Error("Sync stopped so it wouldn't remove "+lost.length+" show"+(lost.length===1?"":"s")+" from Dropbox. Nothing was changed. Earlier copies, below, can put a good copy back."); ge.guard = true; throw ge; }
     applyMerged(merged);
+    if(take) S.dbxMaster = mark;
     if(rd && foldDupes().length) render();
     var out = copy(snap());
     if(rd && same(out, pickSnap(rd))){ setBase(out); return; }
-    var file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
-    return dbxUpload(file, remote && remote.rev, keepalive).then(function(){ setBase(out); }, function(e){
+    var file = sealFile(out, rd);
+    return dbxUpload(file, remote && remote.rev, keepalive).then(function(rev){ sync.rev = rev||""; sync.by = file.by; sync.byAt = file.at; setBase(out); }, function(e){
       if(e.conflict && tries < 3) return runSync(tries+1, false);
       throw e;
     });
   });
 }
 function pickSnap(d){ var o = {}; Object.keys(snap()).forEach(function(k){ o[k] = d[k]; }); return o; }
+/* The file as saved: the copy, plus which device saved it and the mark left by "Use this device's list everywhere". */
+function sealFile(out, rd){
+  var file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString(); file.by = deviceLabel();
+  var m = Math.max(+(rd && rd.master)||0, +S.dbxMaster||0); if(m) file.master = m;
+  return file;
+}
+/* Settings > Sync > Use this device's list everywhere. Dropbox's copy becomes this device's shows, subjects,
+   favorites order and settings. Shows Dropbox has that this device doesn't get a dated unfollow note, so
+   they leave every device. Listening spots and played marks still keep whichever is newer. Each other
+   device takes the list whole the next time it syncs. Dropbox keeps the copy it replaced (Earlier copies). */
+function dbxMakeMaster(){
+  var now = Date.now(), tries = 0;
+  var go = function(){
+    return dbxDownload().then(function(remote){
+      var rd = remote && remote.data && remote.data.app==="podcast-player" ? remote.data : null;
+      var mine = copy(snap());
+      var m = rd ? mergeSync(getBase(), mine, rd, false) : copy(mine);
+      m.subs = copy(mine.subs); m.fav = copy(mine.fav); m.prefs = copy(mine.prefs);
+      m.unf = m.unf||{};
+      Object.keys(m.subs).forEach(function(id){ var u = m.unf[id]; if(u && u > (+m.subs[id].fT||0)) m.subs[id].fT = now; });
+      if(rd) Object.keys(rd.subs||{}).forEach(function(id){ if(!m.subs[id] && !((+m.unf[id]||0) > (+(rd.subs[id]||{}).fT||0))) m.unf[id] = now; });
+      applyMerged(m);
+      S.dbxMaster = now;
+      var out = copy(snap()), file = sealFile(out, null);
+      return dbxUpload(file, remote && remote.rev).then(function(rev){ sync.rev = rev||""; sync.by = file.by; sync.byAt = file.at; setBase(out); }, function(err){
+        if(err.conflict && ++tries < 3) return go();
+        throw err;
+      });
+    });
+  };
+  if(sync.busy) return sync.busy.then(dbxMakeMaster, dbxMakeMaster);
+  setSync("Saving this device's list to Dropbox…");
+  sync.busy = go().then(function(){
+    sync.at = Date.now(); sync.sent = stable(snap()); sync.syncedKey = keyState(); sync.err = false;
+    setSync("Dropbox now has this device's list ("+sumText(listSummary(snap()))+"). Your other devices take it the next time they sync. "+syncedLabel());
+    toast("This device's list is now the one on Dropbox");
+  }, function(err){ setSync("Couldn't save this device's list to Dropbox. "+errText(err), true); })
+    .then(function(){ sync.busy = null; master.open = false; if(route.tab==="settings") render(); if(sync.again){ sync.again = false; syncSoon(800); } });
+  return sync.busy;
+}
+var master = {open:false, remote:null, err:"", armed:false};
+function masterBox(){
+  var box = el("div",{id:"masterBox", style:"display:flex;flex-direction:column;gap:10px;margin-top:12px"});
+  if(!master.open){
+    box.appendChild(el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Use this device's list everywhere", onclick:function(){
+      master.open = true; master.remote = null; master.err = ""; master.armed = false; masterDraw();
+      dbxDownload().then(function(r){ master.remote = r && r.data && r.data.app==="podcast-player" ? listSummary(r.data) : {shows:0, cats:0, favs:0}; masterDraw(); },
+        function(e){ master.err = errText(e); masterDraw(); });
+    }}) ]));
+    return box;
+  }
+  var mine = listSummary(snap());
+  box.appendChild(el("h3",{text:"Use this device's list everywhere"}));
+  box.appendChild(el("p",{class:"note", text:"Your other devices will show exactly the shows, subjects, favorites order and settings on this one. Shows that aren't on this device leave the others too. Listening spots and played marks aren't affected. Dropbox keeps the copy it replaces, so Earlier copies can bring it back."}));
+  box.appendChild(el("p",{text:"On this device: "+sumText(mine)+"."}));
+  box.appendChild(el("p",{text:"On Dropbox now: "+(master.err ? "couldn't check ("+master.err+")" : master.remote ? sumText(master.remote) : "checking…")+"."}));
+  var tooFew = mine.shows < 2;
+  if(tooFew) box.appendChild(el("p",{class:"status err", text:"This device has only "+mine.shows+" show, so it doesn't look like your full list. Use this on the device that has the list you want."}));
+  var yes = el("button",{class:"btn", disabled: tooFew || !master.remote || !!master.err, text: master.armed ? "Tap again to confirm" : "Yes, use this device's list", onclick:function(){
+    if(!master.armed){ master.armed = true; masterDraw(); setTimeout(function(){ if(master.armed){ master.armed = false; masterDraw(); } }, 8000); return; }
+    master.armed = false; this.disabled = true; this.textContent = "Saving…"; dbxMakeMaster();
+  }});
+  box.appendChild(el("div",{class:"btn-row"},[ yes, el("button",{class:"btn secondary", text:"Cancel", onclick:function(){ master.open = false; masterDraw(); }}) ]));
+  return box;
+}
+function masterDraw(){ var b = $("masterBox"); if(b) b.replaceWith(masterBox()); }
 function syncNow(keepalive){
   if(!dbx || !dbxKey()) return Promise.resolve();
   if(sync.busy){ sync.again = true; return sync.busy; }
@@ -3671,6 +3760,16 @@ function syncCheck(){
   else if(stable(snap())!==sync.sent && Date.now()-sync.at > 120000) syncSoon(1000);
 }
 setInterval(syncCheck, 30000);
+/* An app left open on a computer never goes to the background, so it used to keep showing its old list until
+   something changed on it. Now, while it's on screen, it asks Dropbox every two minutes whether the file
+   changed (a tiny request) and syncs when it did, and it checks again whenever its window comes to the front. */
+function pullCheck(){
+  if(!dbx || sync.busy || document.hidden || navigator.onLine===false) return;
+  dbxApi("files/get_metadata", {path:DBX_FILE}).then(function(m){ if(m && m.rev && m.rev!==sync.rev) syncNow(); }, function(){});
+}
+setInterval(pullCheck, 120000);
+window.addEventListener("focus", function(){ if(dbx && Date.now()-sync.at > 20000) syncSoon(300); });
+window.addEventListener("pageshow", function(e){ if(dbx && e.persisted) syncSoon(300); });
 window.addEventListener("online", function(){ syncSoon(500); });
 document.addEventListener("visibilitychange", function(){ if(!dbx) return; if(document.visibilityState==="visible") syncSoon(300); else syncNow(true); });
 
@@ -3734,8 +3833,8 @@ function histUse(e){
         // The old copy goes in as Dropbox's side of a first sync: its shows join what's here, and its order and settings win.
         var m = mergeSync(null, now, pickSnap(old), false);
         applyMerged(m);
-        var out = copy(snap()), file = copy(out); file.app = "podcast-player"; file.v = 1; file.at = new Date().toISOString();
-        return dbxUpload(file, remote && remote.rev).then(function(){ setBase(out); }, function(err){
+        var out = copy(snap()), file = sealFile(out, rd);
+        return dbxUpload(file, remote && remote.rev).then(function(rev){ sync.rev = rev||""; sync.by = file.by; sync.byAt = file.at; setBase(out); }, function(err){
           if(err.conflict && ++tries < 3) return go();
           throw err;
         });
@@ -3791,10 +3890,12 @@ function syncCard(){
     card.appendChild(el("p",{text:"Signed in"+(dbx.name? " as "+dbx.name : "")+(dbx.email? " ("+dbx.email+")" : "")+". Shows, subjects, favorites order, listening spots and playback settings stay the same on every device signed in to this Dropbox. Your Podcast Index key stays on each device."}));
     if(!sync.msg && sync.at) status.textContent = syncedLabel();
     card.appendChild(status);
+    card.appendChild(el("p",{class:"note", text:"On this device ("+deviceLabel()+", app version "+APP_VER+"): "+sumText(listSummary(snap()))+"."+(sync.by && sync.byAt ? " Dropbox's copy was last saved by "+sync.by+" "+histWhen(sync.byAt)+"." : "")}));
     card.appendChild(el("div",{class:"btn-row"},[
       el("button",{class:"btn secondary", text:"Sync now", onclick:function(){ syncNow(); }}),
       el("button",{class:"btn secondary", text:"Sign out of Dropbox", onclick:function(){ dbxSignOut(); toast("Signed out of Dropbox. Your shows stay on this device."); render(); }})
     ]));
+    card.appendChild(masterBox());
     card.appendChild(histBox());
     return card;
   }
@@ -3830,6 +3931,7 @@ function syncCard(){
     card.appendChild(codeArea);
   }
   card.appendChild(status);
+  card.appendChild(el("p",{class:"note", text:"Not signed in on this device, so its list doesn't sync. On this device ("+deviceLabel()+", app version "+APP_VER+"): "+sumText(listSummary(snap()))+"."}));
   return card;
 }
 
@@ -3841,7 +3943,7 @@ render();
 if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(function(){});
 if(dbx) syncNow();
 setTimeout(function(){ if(Date.now()-(S.quietAt||0) > QUIET_RESCAN) quietScan(); }, 6000);
-window.__pp = {S:S, quietScan:quietScan, isQuiet:isQuiet, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
+window.__pp = {S:S, quietScan:quietScan, isQuiet:isQuiet, episodesFor:episodesFor, appleSearch:appleSearch, parseTranscript:parseTranscript, matchFeed:matchFeed, mergeSync:mergeSync, stable:stable, pkceChallenge:pkceChallenge, syncNow:syncNow, pullCheck:pullCheck, dbxMakeMaster:dbxMakeMaster, sync:sync, dbxAuthUrl:dbxAuthUrl, dbxPending:dbxPending};
 })();
 </script>
 </body>

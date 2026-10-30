@@ -15,6 +15,7 @@ A podcast player web app for iPhone and iPad that installs to the Home Screen fr
 - Shows that haven't put out an episode in over a year are flagged as candidates to unfollow; you choose Unfollow or Keep for each
 - OPML import from any podcast app (Overcast, Pocket Casts and others), and backup and restore between devices
 - Sync between devices through each person's own Dropbox (Sign in with Dropbox in Settings)
+- Settings > Sync shows what this device holds (shows, subjects, favorites) and which device saved Dropbox's copy last, so lists are easy to compare. An app left open checks Dropbox every two minutes and whenever its window comes to the front. Use this device's list everywhere (two taps) makes every other device take this one's shows, subjects, favorites order and settings the next time it syncs; listening spots and played marks still keep whichever is newer, and Earlier copies can undo it
 
 Everything you set is stored in your browser on each device. If you sign in with Dropbox, your shows, subjects, favorites order, listening spots and playback settings are also kept in one file in the app's own folder in your Dropbox, so your devices stay in step. Your Podcast Index key is never synced. Nothing else is sent anywhere except the podcast directories and the shows' own servers.
 
