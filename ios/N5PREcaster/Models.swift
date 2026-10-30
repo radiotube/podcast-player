@@ -23,6 +23,12 @@ struct Episode: Identifiable, Hashable, Codable {
     let chaptersUrl: String
 }
 
+struct SubjectItem: Identifiable {
+    let episode: Episode
+    let show: Show
+    var id: String { show.id + "|" + episode.guid }
+}
+
 struct Chapter: Identifiable, Hashable {
     var id: Double { start }
     let start: Double

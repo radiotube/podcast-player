@@ -23,11 +23,14 @@ final class Library: ObservableObject {
     var skipBack: Double = 15
     var skipFwd: Double = 30
     private var lastRefresh = Date.distantPast
+    private var lastFavCheck = Date.distantPast
 
     let dropbox: Dropbox
+    let downloads: Downloads
 
-    init(dropbox: Dropbox) {
+    init(dropbox: Dropbox, downloads: Downloads) {
         self.dropbox = dropbox
+        self.downloads = downloads
         let d = UserDefaults.standard
         localPos = d.dictionary(forKey: "pos") as? [String: Double] ?? [:]
         localPlayed = d.dictionary(forKey: "played") as? [String: Double] ?? [:]
@@ -63,6 +66,18 @@ final class Library: ObservableObject {
         } catch {
             status = "Couldn't read your list from Dropbox: \(error.localizedDescription)"
         }
+    }
+
+    /// The list from Dropbox, then fresh episode lists for Favorites (which starts their downloads).
+    func refreshAll(force: Bool = false) async {
+        await refresh(force: force)
+        await refreshFavorites(force: force)
+    }
+
+    func refreshFavorites(force: Bool = false) async {
+        if !force && Date().timeIntervalSince(lastFavCheck) < 15 * 60 { return }
+        lastFavCheck = Date()
+        for show in favShows { await loadEpisodes(show, force: true) }
     }
 
     func apply(_ data: Data) throws {
@@ -133,6 +148,16 @@ final class Library: ObservableObject {
 
     // MARK: Episodes
 
+    /// Every unplayed episode from a subject's shows, newest first, once their lists have loaded.
+    func unplayed(in subject: String) -> [SubjectItem] {
+        var out: [SubjectItem] = []
+        for show in showsIn(subject) {
+            for ep in episodes[show.id] ?? [] where !isPlayed(ep.guid) { out.append(SubjectItem(episode: ep, show: show)) }
+        }
+        out.sort { ($0.episode.date ?? .distantPast) > ($1.episode.date ?? .distantPast) }
+        return Array(out.prefix(150))
+    }
+
     /// The newest episode not heard yet, once the show's list has loaded.
     func latestUnheard(_ show: Show) -> Episode? {
         episodes[show.id]?.first { !isPlayed($0.guid) }
@@ -155,6 +180,7 @@ final class Library: ObservableObject {
             episodes[show.id] = list
             feedErrors[show.id] = nil
             Feeds.store(list, for: show.id)
+            if fav.contains(show.id), let ep = latestUnheard(show) { downloads.autoStart(ep) }
         } catch {
             feedErrors[show.id] = error.localizedDescription
         }
@@ -184,5 +210,6 @@ final class Library: ObservableObject {
         localPos[guid] = 0
         UserDefaults.standard.set(localPlayed, forKey: "played")
         UserDefaults.standard.set(localPos, forKey: "pos")
+        if on { downloads.listened(guid) }
     }
 }

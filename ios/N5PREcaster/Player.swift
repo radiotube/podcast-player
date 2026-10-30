@@ -156,7 +156,10 @@ final class Player: ObservableObject {
     // MARK: Internals
 
     private func loadItem() {
-        guard let ep = now?.episode, let url = URL(string: ep.audioUrl) else { return }
+        guard let ep = now?.episode else { return }
+        let local = library.downloads.localURL(ep.guid)
+        guard let url = local ?? URL(string: ep.audioUrl) else { return }
+        library.downloads.inUse = local == nil ? nil : ep.guid
         let item = AVPlayerItem(url: url)
         pendingSeek = time > 5 ? time : nil
         statusObs = item.observe(\.status, options: [.new]) { [weak self] _, _ in
@@ -232,10 +235,12 @@ final class Player: ObservableObject {
 
     private func itemEnded(_ id: ObjectIdentifier?) {
         guard let item = player.currentItem, id == ObjectIdentifier(item), let n = now else { return }
-        library.setPlayed(n.episode.guid, true)
         player.pause()
-        player.seek(to: .zero)
+        player.replaceCurrentItem(with: nil)
+        loaded = false
+        library.downloads.inUse = nil
         time = 0
+        library.setPlayed(n.episode.guid, true)
         updateNowPlaying()
     }
 

@@ -10,9 +10,6 @@ struct ContentView: View {
     @State private var filter = ""
     @State private var showSettings = false
 
-    private func inFilter(_ show: Show) -> Bool {
-        filter.isEmpty || show.cats.contains(filter)
-    }
 
     var body: some View {
         NavigationStack {
@@ -40,7 +37,24 @@ struct ContentView: View {
                         }
                     }
 
-                    let favs = library.favShows.filter(inFilter)
+                    if !filter.isEmpty {
+                        let items = library.unplayed(in: filter)
+                        if items.isEmpty {
+                            Text(library.loading.isEmpty ? "Nothing new in \(filter)." : "Getting episodes…")
+                                .foregroundStyle(Theme.muted)
+                                .frame(maxWidth: .infinity)
+                                .padding(28)
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(items) { item in
+                                    EpisodeRow(ep: item.episode, show: item.show, showName: true)
+                                    Rectangle().fill(Theme.line).frame(height: 1)
+                                }
+                            }
+                        }
+                    }
+
+                    let favs = filter.isEmpty ? library.favShows : []
                     if !favs.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             SectionLabel("Favorites")
@@ -50,10 +64,10 @@ struct ContentView: View {
                         }
                     }
 
-                    let others = library.allShows.filter { !library.fav.contains($0.id) && inFilter($0) }
+                    let others = filter.isEmpty ? library.allShows.filter { !library.fav.contains($0.id) } : []
                     if !others.isEmpty {
                         VStack(alignment: .leading, spacing: 0) {
-                            SectionLabel(filter.isEmpty ? "All shows" : filter).padding(.bottom, 4)
+                            SectionLabel("All shows").padding(.bottom, 4)
                             ForEach(others) { show in
                                 NavigationLink(value: show) { ShowRow(show: show) }
                                     .buttonStyle(.plain)
@@ -62,7 +76,7 @@ struct ContentView: View {
                         }
                     }
 
-                    if favs.isEmpty && others.isEmpty && library.status.isEmpty {
+                    if filter.isEmpty && favs.isEmpty && others.isEmpty && library.status.isEmpty {
                         Text(library.busy ? "Getting your list from Dropbox…" : "No shows here yet.")
                             .foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity)
@@ -83,7 +97,11 @@ struct ContentView: View {
                         .accessibilityLabel("Settings")
                 }
             }
-            .refreshable { await library.refresh() }
+            .refreshable { await library.refreshAll(force: true) }
+            .task(id: filter) {
+                guard !filter.isEmpty else { return }
+                for show in library.showsIn(filter) { await library.loadEpisodes(show) }
+            }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if player.now != nil { MiniPlayer() }
@@ -92,6 +110,7 @@ struct ContentView: View {
             SettingsView()
                 .environmentObject(dropbox)
                 .environmentObject(library)
+                .environmentObject(library.downloads)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
@@ -101,7 +120,7 @@ struct ContentView: View {
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
-        .task { await library.refresh(force: false) }
+        .task { await library.refreshAll() }
     }
 }
 
@@ -113,7 +132,6 @@ struct FavCard: View {
 
     var body: some View {
         let latest = library.latestUnheard(show)
-        let loaded = library.episodes[show.id] != nil
         let isCurrent = latest != nil && player.now?.episode.guid == latest?.guid
         HStack(spacing: 12) {
             NavigationLink(value: show) {
@@ -131,8 +149,6 @@ struct FavCard: View {
                         Group {
                             if let ep = latest {
                                 Text(ep.title)
-                            } else if loaded {
-                                Text("All caught up")
                             } else {
                                 Text(show.author)
                             }
@@ -272,14 +288,22 @@ struct ShowView: View {
 struct EpisodeRow: View {
     let ep: Episode
     let show: Show
+    var showName = false
     @EnvironmentObject var library: Library
     @EnvironmentObject var player: Player
+    @EnvironmentObject var downloads: Downloads
 
     var body: some View {
         let played = library.isPlayed(ep.guid)
         let current = player.now?.episode.guid == ep.guid
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
+                if showName {
+                    Text(show.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .lineLimit(1)
+                }
                 Text(detail(played: played, current: current))
                     .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(current ? Theme.accent : Theme.muted)
@@ -295,6 +319,7 @@ struct EpisodeRow: View {
                 }
             }
             Spacer(minLength: 0)
+            DownloadButton(ep: ep)
             Button {
                 if current { player.toggle() } else { player.play(ep, show: show) }
             } label: {
@@ -307,6 +332,11 @@ struct EpisodeRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             Button(played ? "Mark as not played" : "Mark as played") { library.setPlayed(ep.guid, !played) }
+            if downloads.isDownloaded(ep.guid) {
+                Button("Remove download", role: .destructive) { downloads.remove(ep.guid) }
+            } else if downloads.progress[ep.guid] == nil {
+                Button("Download") { downloads.start(ep) }
+            }
         }
     }
 
@@ -323,8 +353,47 @@ struct EpisodeRow: View {
         } else if ep.duration > 0 {
             parts.append(clock(ep.duration))
         }
+        if downloads.isDownloaded(ep.guid) { parts.append("Downloaded") }
         if current { parts.append(player.isPlaying ? "Playing" : "Paused") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Download, progress ring, or a filled mark once the episode is on the iPhone.
+struct DownloadButton: View {
+    let ep: Episode
+    @EnvironmentObject var downloads: Downloads
+
+    var body: some View {
+        Group {
+            if downloads.isDownloaded(ep.guid) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityLabel("Downloaded")
+            } else if let p = downloads.progress[ep.guid] {
+                Button { downloads.cancel(ep.guid) } label: {
+                    ZStack {
+                        Circle().stroke(Theme.surface2, lineWidth: 3)
+                        Circle().trim(from: 0, to: max(0.03, p))
+                            .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Image(systemName: "stop.fill").font(.system(size: 8)).foregroundStyle(Theme.fg)
+                    }
+                    .frame(width: 24, height: 24)
+                }
+                .accessibilityLabel("Stop download")
+            } else {
+                Button { downloads.start(ep) } label: {
+                    Image(systemName: downloads.failed[ep.guid] == nil ? "arrow.down.circle" : "exclamationmark.arrow.circlepath")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.muted)
+                }
+                .accessibilityLabel(downloads.failed[ep.guid] == nil ? "Download" : "Download failed, try again")
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(width: 36, height: 44)
     }
 }
 
@@ -577,6 +646,7 @@ struct ChapterList: View {
 struct SettingsView: View {
     @EnvironmentObject var dropbox: Dropbox
     @EnvironmentObject var library: Library
+    @EnvironmentObject var downloads: Downloads
     @Environment(\.webAuthenticationSession) private var webAuth
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -634,6 +704,19 @@ struct SettingsView: View {
                 }
                 .listRowBackground(Theme.surface)
 
+                Section {
+                    Toggle("Download new Favorites episodes", isOn: $downloads.autoFavorites)
+                    Toggle("Delete after listening", isOn: $downloads.deleteAfter)
+                    LabeledContent("Space used", value: ByteCountFormatter.string(fromByteCount: downloads.bytesUsed, countStyle: .file))
+                    Button("Remove all downloads", role: .destructive) { downloads.removeAll() }
+                        .disabled(downloads.files.isEmpty)
+                } header: {
+                    Text("Downloads")
+                } footer: {
+                    Text("On Wi-Fi, the newest unplayed episode of each favorite downloads by itself, also while the app is closed when iOS allows. Any episode can be downloaded with its arrow.")
+                }
+                .listRowBackground(Theme.surface)
+
                 Section("Playback") {
                     LabeledContent("Skip back", value: "\(Int(library.skipBack)) seconds")
                     LabeledContent("Skip forward", value: "\(Int(library.skipFwd)) seconds")
@@ -641,7 +724,7 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    LabeledContent("Version", value: "0.2, first native build")
+                    LabeledContent("Version", value: "0.3")
                 }
                 .listRowBackground(Theme.surface)
             }
