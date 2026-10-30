@@ -7,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject var dropbox: Dropbox
     @EnvironmentObject var library: Library
     @EnvironmentObject var player: Player
+    @EnvironmentObject var transcripts: Transcripts
     @State private var filter = ""
     @State private var showSettings = false
 
@@ -111,16 +112,22 @@ struct ContentView: View {
                 .environmentObject(dropbox)
                 .environmentObject(library)
                 .environmentObject(library.downloads)
+                .environmentObject(transcripts)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
         .sheet(isPresented: $player.showFull) {
             PlayerView()
                 .environmentObject(player)
+                .environmentObject(library.downloads)
+                .environmentObject(transcripts)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
-        .task { await library.refreshAll() }
+        .task {
+            await library.refreshAll()
+            transcripts.scan()
+        }
     }
 }
 
@@ -457,6 +464,9 @@ struct MiniPlayer: View {
 
 struct PlayerView: View {
     @EnvironmentObject var player: Player
+    @EnvironmentObject var downloads: Downloads
+    @EnvironmentObject var transcripts: Transcripts
+    @State private var showTranscript = false
     @State private var scrub: Double = 0
     @State private var scrubbing = false
     private let speeds: [Double] = [0.8, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2, 2.5, 3]
@@ -586,6 +596,16 @@ struct PlayerView: View {
                         }
                     }
 
+                    Button { showTranscript = true } label: {
+                        Label("Transcript", systemImage: "text.quote")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.fg)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 40)
+                            .background(Capsule().fill(Theme.surface2))
+                    }
+                    .buttonStyle(.plain)
+
                     if !player.errorText.isEmpty {
                         Text(player.errorText).font(.footnote).foregroundStyle(Color(hex: 0xEF7D6D))
                     }
@@ -601,6 +621,121 @@ struct PlayerView: View {
             }
         }
         .background(Theme.bg.ignoresSafeArea())
+        .sheet(isPresented: $showTranscript) {
+            TranscriptView()
+                .environmentObject(player)
+                .environmentObject(downloads)
+                .environmentObject(transcripts)
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+        }
+    }
+}
+
+struct TranscriptView: View {
+    @EnvironmentObject var player: Player
+    @EnvironmentObject var downloads: Downloads
+    @EnvironmentObject var transcripts: Transcripts
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let ep = player.now?.episode {
+                    if let f = transcripts.current, transcripts.currentGuid == ep.guid {
+                        lines(f)
+                    } else {
+                        status(ep)
+                    }
+                } else {
+                    Text("Nothing playing").foregroundStyle(Theme.muted)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.bg)
+            .navigationTitle("Transcript")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.bg, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task(id: player.now?.episode.guid) { await transcripts.loadCurrent(player.now?.episode) }
+    }
+
+    private func lines(_ f: TranscriptFile) -> some View {
+        let at = f.segs.lastIndex { $0.s <= player.time + 0.3 }
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(f.segs.enumerated()), id: \.offset) { i, seg in
+                        Text(seg.b)
+                            .font(.system(size: 18, weight: i == at ? Font.Weight.semibold : Font.Weight.regular))
+                            .foregroundStyle(i == at ? Theme.fg : Theme.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { player.seek(seg.s) }
+                            .id(i)
+                    }
+                }
+                .padding(20)
+            }
+            .onAppear { if let at { proxy.scrollTo(at, anchor: .center) } }
+            .onChange(of: at) { _, new in
+                if let new { withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(new, anchor: .center) } }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func status(_ ep: Episode) -> some View {
+        VStack(spacing: 14) {
+            if transcripts.working == ep.guid {
+                ProgressView()
+                Text("Making the transcript on this iPhone. It can take a few minutes for a long episode, and keeps going while you listen.")
+            } else if transcripts.loadingCurrent {
+                ProgressView()
+            } else if transcripts.isQueued(ep.guid) {
+                Text("Waiting for another transcript to finish first.")
+            } else if downloads.isDownloaded(ep.guid) {
+                if let err = transcripts.failed[ep.guid] {
+                    Text("Couldn't make one: \(err)")
+                } else if !(ep.transcript ?? "").isEmpty {
+                    Text("This show publishes its own transcript, which the web app shows. You can still make one here.")
+                } else {
+                    Text("No transcript yet.")
+                }
+                Button("Make a transcript") { transcripts.make(ep) }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.accentInk)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(Theme.accent))
+                    .buttonStyle(.plain)
+            } else {
+                Text("Download this episode to make a transcript on the iPhone.")
+                if downloads.progress[ep.guid] == nil {
+                    Button("Download") { downloads.start(ep) }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.accentInk)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 44)
+                        .background(Capsule().fill(Theme.accent))
+                        .buttonStyle(.plain)
+                } else {
+                    ProgressView(value: downloads.progress[ep.guid] ?? 0).tint(Theme.accent).frame(width: 160)
+                }
+            }
+            if !transcripts.note.isEmpty {
+                Text(transcripts.note).font(.footnote)
+            }
+        }
+        .font(.system(size: 15))
+        .foregroundStyle(Theme.muted)
+        .multilineTextAlignment(.center)
+        .padding(28)
     }
 }
 
@@ -647,6 +782,7 @@ struct SettingsView: View {
     @EnvironmentObject var dropbox: Dropbox
     @EnvironmentObject var library: Library
     @EnvironmentObject var downloads: Downloads
+    @EnvironmentObject var transcripts: Transcripts
     @Environment(\.webAuthenticationSession) private var webAuth
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -661,6 +797,10 @@ struct SettingsView: View {
                 Section {
                     if dropbox.signedIn {
                         Label("Signed in to Dropbox", systemImage: "checkmark.circle.fill")
+                        if dropbox.needsWriteSignIn {
+                            Text("Sign out and back in once so transcripts can be saved to Dropbox.")
+                                .font(.footnote).foregroundStyle(Theme.accent)
+                        }
                         Button("Bring in my list again") { Task { await library.refresh() } }
                         Button("Sign out of Dropbox", role: .destructive) {
                             dropbox.signOut()
@@ -717,6 +857,18 @@ struct SettingsView: View {
                 }
                 .listRowBackground(Theme.surface)
 
+                Section {
+                    Toggle("Make transcripts for downloads", isOn: $transcripts.auto)
+                    if !transcripts.note.isEmpty {
+                        Text(transcripts.note).font(.footnote).foregroundStyle(Theme.muted)
+                    }
+                } header: {
+                    Text("Transcripts")
+                } footer: {
+                    Text("Made on this iPhone with Apple's speech recognition (iOS 26), free and with nothing sent to the cloud, then saved to Dropbox so the web app has them too.")
+                }
+                .listRowBackground(Theme.surface)
+
                 Section("Playback") {
                     LabeledContent("Skip back", value: "\(Int(library.skipBack)) seconds")
                     LabeledContent("Skip forward", value: "\(Int(library.skipFwd)) seconds")
@@ -724,7 +876,7 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    LabeledContent("Version", value: "0.3")
+                    LabeledContent("Version", value: "0.4")
                 }
                 .listRowBackground(Theme.surface)
             }

@@ -21,6 +21,10 @@ final class Downloads: ObservableObject {
 
     /// The episode the player is using from a file, which must not be deleted mid-play.
     var inUse: String?
+    /// Episodes whose files a transcript is being made from.
+    var protected: Set<String> = []
+    /// Told when a download finishes, so a transcript can be made for it.
+    var onFinished: ((String) -> Void)?
     private var skipped: Set<String>
     private var session: URLSession!
     private let delegate = DownloadDelegate()
@@ -116,7 +120,7 @@ final class Downloads: ObservableObject {
 
     /// Removes the file. A download the user removes isn't fetched again by itself.
     func remove(_ guid: String, byUser: Bool = true) {
-        guard inUse != guid, let name = files[guid] else { return }
+        guard inUse != guid, !protected.contains(guid), let name = files[guid] else { return }
         try? FileManager.default.removeItem(at: Downloads.folder.appendingPathComponent(name))
         files[guid] = nil
         saveFiles()
@@ -141,6 +145,7 @@ final class Downloads: ObservableObject {
         progress[guid] = nil
         files[guid] = name
         saveFiles()
+        onFinished?(guid)
     }
 
     fileprivate func progressed(_ guid: String, _ p: Double) {

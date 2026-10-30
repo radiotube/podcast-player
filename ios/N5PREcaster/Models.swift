@@ -21,6 +21,7 @@ struct Episode: Identifiable, Hashable, Codable {
     let summary: String
     let image: String
     let chaptersUrl: String
+    let transcript: String?
 }
 
 struct SubjectItem: Identifiable {

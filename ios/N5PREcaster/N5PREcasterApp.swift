@@ -6,6 +6,7 @@ struct N5PREcasterApp: App {
     @StateObject private var dropbox: Dropbox
     @StateObject private var library: Library
     @StateObject private var player: Player
+    @StateObject private var transcripts: Transcripts
     @Environment(\.scenePhase) private var phase
 
     init() {
@@ -16,6 +17,7 @@ struct N5PREcasterApp: App {
         _dropbox = StateObject(wrappedValue: d)
         _library = StateObject(wrappedValue: l)
         _player = StateObject(wrappedValue: p)
+        _transcripts = StateObject(wrappedValue: Transcripts(library: l))
     }
 
     var body: some Scene {
@@ -27,13 +29,19 @@ struct N5PREcasterApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
                 .environmentObject(library.downloads)
+                .environmentObject(transcripts)
         }
         .onChange(of: phase) { _, newPhase in
             if newPhase == .background {
                 player.savePosition()
                 N5PREcasterApp.scheduleRefresh()
             }
-            if newPhase == .active { Task { await library.refreshAll() } }
+            if newPhase == .active {
+                Task {
+                    await library.refreshAll()
+                    transcripts.scan()
+                }
+            }
         }
         .backgroundTask(.appRefresh(N5PREcasterApp.refreshId)) {
             N5PREcasterApp.scheduleRefresh()
