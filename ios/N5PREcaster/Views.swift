@@ -14,6 +14,8 @@ struct ContentView: View {
     @State private var renaming = ""
     @State private var arranging: ArrangeView.Kind?
     @State private var newName = ""
+    @State private var markAll: [String] = []
+    @AppStorage("markKeep") private var markKeep = 3
 
     var body: some View {
         NavigationStack {
@@ -62,6 +64,34 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(28)
                         } else {
+                            HStack {
+                                Button("Mark all played") {
+                                    let cut = Date().addingTimeInterval(-Double(markKeep) * 86400)
+                                    markAll = items.filter { item in
+                                        item.episode.guid != player.now?.episode.guid
+                                            && (markKeep == 0 || (item.episode.date ?? .distantPast) < cut)
+                                    }.map(\.episode.guid)
+                                }
+                                .buttonStyle(.bordered)
+                                Spacer()
+                                Picker("Keep", selection: $markKeep) {
+                                    Text("Keep none").tag(0)
+                                    Text("Keep last day").tag(1)
+                                    Text("Keep last 3 days").tag(3)
+                                    Text("Keep last 7 days").tag(7)
+                                }
+                                .pickerStyle(.menu)
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .confirmationDialog(markAll.isEmpty ? "Nothing to mark" : "Mark \(markAll.count) episode\(markAll.count == 1 ? "" : "s") in \(filter) as played?",
+                                                isPresented: Binding(get: { !markAll.isEmpty }, set: { if !$0 { markAll = [] } }),
+                                                titleVisibility: .visible) {
+                                Button("Mark played") { library.setPlayed(all: markAll); markAll = [] }
+                                Button("Cancel", role: .cancel) { markAll = [] }
+                            } message: {
+                                Text(markKeep == 0 ? "Your other devices will see this too." : "Episodes from the last \(markKeep == 1 ? "day" : "\(markKeep) days") stay. Your other devices will see this too.")
+                            }
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach(items) { item in
                                     EpisodeRow(ep: item.episode, show: item.show, showName: true, subject: filter)
@@ -1310,7 +1340,7 @@ struct SettingsView: View {
                 .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "0.9")
+                    LabeledContent("Version", value: "0.9.1")
                 }
                 .listRowBackground(Theme.surface)
             }

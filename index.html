@@ -1007,7 +1007,14 @@ function renderTopic(view, cat, memberOf){
   // Listed newest first, like the iPhone app. Play in order still follows the topic queue.
   var list = byDate(queueEps(q), false);
   var sec = el("section");
-  if(list.length) sec.appendChild(el("p",{class:"note", style:"margin-top:12px", text: list.length+" unheard episode"+(list.length===1?"":"s")+", newest first."}));
+  if(list.length){
+    sec.appendChild(el("p",{class:"note", style:"margin-top:12px", text: list.length+" unheard episode"+(list.length===1?"":"s")+", newest first."}));
+    // Mark all played: clears episodes heard elsewhere. Keeps the last few days and the one in the player.
+    var keepSel = el("select",{id:"markAllKeep", "aria-label":"Keep recent episodes"}, [0,1,3,7].map(function(d){ return el("option",{value:String(d), text: d? "Keep last "+(d===1?"day":d+" days") : "Keep none", selected:d===(S.markKeep==null?3:S.markKeep)}); }));
+    keepSel.onchange = function(){ S.markKeep = +this.value; save(); };
+    sec.appendChild(el("div",{style:"display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"},[
+      el("button",{class:"btn secondary", text:"Mark all played", onclick:function(){ markAllPlayed(cat, list, +keepSel.value); }}), keepSel ]));
+  }
   if(waiting) sec.appendChild(el("p",{class:"note", style:"margin-top:8px", text:"Loading episodes from "+waiting+" more show"+(waiting===1?"":"s")+"…"}));
   if(!list.length){
     if(waiting){ sec.appendChild(el("div",{class:"spinner", role:"status", "aria-label":"Loading episodes"})); }
@@ -1025,6 +1032,14 @@ function renderTopic(view, cat, memberOf){
   view.appendChild(sec);
 }
 var topicShown = {};
+function markAllPlayed(cat, list, days){
+  var cut = Date.now() - days*864e5;
+  var marks = list.filter(function(e){ return !(cur && cur.g===e.g) && !(days && (new Date(e.d).getTime()||0) >= cut); });
+  if(!marks.length){ alert("Nothing to mark. Everything in "+cat+" is from the last "+(days===1?"day":days+" days")+"."); return; }
+  if(!confirm("Mark "+marks.length+" episode"+(marks.length===1?"":"s")+" in "+cat+" as played"+(days? ", keeping the last "+(days===1?"day":days+" days") : "")+"? Your other devices will see this too.")) return;
+  marks.forEach(function(e){ setPlayed(e.g, true); });
+  save(true); render();
+}
 function keepScroll(f){ var st = $("scroller").scrollTop; f(); $("scroller").scrollTop = st; }
 function onTopic(){ return route.tab==="home" && !route.show && !route.quiet && !arranging && filterCat && filterCat!=="-" && S.catView!=="shows"; }
 function favRow(sh, i){
@@ -3381,7 +3396,7 @@ function lsSet(k, v){ try{ if(v==null) localStorage.removeItem(k); else localSto
 function dbxKey(){ var o = null; try{ o = localStorage.getItem("pp.dbx.key"); }catch(e){} return DBX_APP_KEY || o || ""; }
 var dbx = lsGet(DBX_AUTH);
 var sync = {busy:null, again:false, timer:null, msg:"", err:false, at:0, sent:"", orphan:"", rev:"", by:"", byAt:""};
-var APP_VER = 48;
+var APP_VER = 49;
 /* A short name for this browser, written into sync.json so it's clear which device saved Dropbox's copy last. */
 function deviceLabel(){
   var u = navigator.userAgent||"", mobile = /iPhone|iPod/.test(u) ? "iPhone" : (/iPad/.test(u) || (/Macintosh/.test(u) && navigator.maxTouchPoints > 1)) ? "iPad" : /Android/.test(u) ? "Android" : "";

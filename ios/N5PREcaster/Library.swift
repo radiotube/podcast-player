@@ -630,6 +630,23 @@ final class Library: ObservableObject {
 
     private static var nowMsD: Double { (Date().timeIntervalSince1970 * 1000).rounded() }
 
+    /// Marks many episodes played at once (Mark all played), sent in one save.
+    func setPlayed(all guids: [String]) {
+        let now = Library.nowMsD
+        for g in guids {
+            localPlayed[g] = now
+            localPos[g] = 0
+            localPosT[g] = now
+            downloads.listened(g)
+            unsent.insert(g)
+        }
+        UserDefaults.standard.set(localPlayed, forKey: "played")
+        UserDefaults.standard.set(localPos, forKey: "pos")
+        UserDefaults.standard.set(localPosT, forKey: "posT")
+        UserDefaults.standard.set(Array(unsent), forKey: "unsent")
+        sendProgressSoon(delay: 1)
+    }
+
     private func markUnsent(_ guid: String) {
         if unsent.insert(guid).inserted { UserDefaults.standard.set(Array(unsent), forKey: "unsent") }
     }
