@@ -78,7 +78,8 @@ final class Player: ObservableObject {
     }
 
     func play() {
-        guard now != nil else { return }
+        guard let item = now else { return }
+        if !isPlaying { library.notePlaying(item.episode, showTitle: item.showTitle, art: item.showArt) }
         if !loaded { loadItem() }
         try? AVAudioSession.sharedInstance().setActive(true)
         let c = MPRemoteCommandCenter.shared()
@@ -86,6 +87,35 @@ final class Player: ObservableObject {
         c.skipForwardCommand.preferredIntervals = [NSNumber(value: skipFwd)]
         player.defaultRate = Float(rate)
         player.play()
+    }
+
+    /// Loads (without playing) the episode last played on another device, when nothing is playing here.
+    func takeOtherDevicesEpisode() {
+        guard !isPlaying, let other = library.episodeFromOtherDevice() else { return }
+        let (ep, showTitle, art) = other
+        library.tookOtherDevicesEpisode()
+        if now?.episode.guid == ep.guid {
+            let t = library.position(ep.guid)
+            if abs(t - time) > 3 {
+                if loaded { seek(t) } else { time = t }
+            }
+            return
+        }
+        savePosition()
+        now = NowItem(episode: ep, showTitle: showTitle, showArt: art)
+        if let data = try? JSONEncoder().encode(now) { UserDefaults.standard.set(data, forKey: "now") }
+        chapters = []
+        artwork = nil
+        artKey = ""
+        lastChapterStart = nil
+        errorText = ""
+        duration = ep.duration
+        time = library.position(ep.guid)
+        loaded = false
+        player.replaceCurrentItem(with: nil)
+        library.downloads.inUse = nil
+        updateNowPlaying()
+        Task { await loadChapters(ep) }
     }
 
     func pause() {

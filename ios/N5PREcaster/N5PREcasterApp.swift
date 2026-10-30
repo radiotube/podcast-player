@@ -40,6 +40,7 @@ struct N5PREcasterApp: App {
             if newPhase == .active {
                 Task {
                     await library.refreshAll()
+                    player.takeOtherDevicesEpisode()
                     transcripts.scan()
                 }
             }

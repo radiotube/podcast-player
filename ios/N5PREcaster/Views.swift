@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showAdd = false
     @State private var renaming = ""
+    @State private var arranging: ArrangeView.Kind?
     @State private var newName = ""
 
     var body: some View {
@@ -22,6 +23,9 @@ struct ContentView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 Chip(title: "All", on: filter.isEmpty) { filter = "" }
+                                    .contextMenu {
+                                        Button { arranging = .subjects } label: { Label("Subject order", systemImage: "arrow.up.arrow.down") }
+                                    }
                                 ForEach(library.subjects, id: \.self) { c in
                                     Chip(title: c, on: filter == c) { filter = c }
                                         .contextMenu {
@@ -29,7 +33,11 @@ struct ContentView: View {
                                                 renaming = c
                                                 newName = c
                                             } label: { Label("Rename subject", systemImage: "pencil") }
+                                            Button { arranging = .subjects } label: { Label("Subject order", systemImage: "arrow.up.arrow.down") }
                                         }
+                                }
+                                if library.subjects.count > 1 {
+                                    Chip(title: "\u{21C4} Order", on: false) { arranging = .subjects }
                                 }
                             }
                         }
@@ -66,7 +74,15 @@ struct ContentView: View {
                     let favs = filter.isEmpty ? library.favShows : []
                     if !favs.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            SectionLabel("Favorites")
+                            HStack {
+                                SectionLabel("Favorites")
+                                Spacer()
+                                if favs.count > 1 {
+                                    Button("Arrange") { arranging = .favorites }
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(Theme.accent)
+                                }
+                            }
                             ForEach(favs) { show in
                                 FavCard(rank: (library.fav.firstIndex(of: show.id) ?? 0) + 1, show: show)
                             }
@@ -143,6 +159,12 @@ struct ContentView: View {
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
+        .sheet(item: $arranging) { kind in
+            ArrangeView(kind: kind)
+                .environmentObject(library)
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+        }
         .sheet(isPresented: $showAdd) {
             AddShowView()
                 .environmentObject(library)
@@ -159,6 +181,7 @@ struct ContentView: View {
         }
         .task {
             await library.refreshAll()
+            player.takeOtherDevicesEpisode()
             transcripts.scan()
         }
     }
@@ -410,6 +433,60 @@ struct ShowView: View {
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
+    }
+}
+
+/// Drag to set the order of Favorites or of the subjects across the top.
+struct ArrangeView: View {
+    enum Kind: String, Identifiable {
+        case favorites, subjects
+        var id: String { rawValue }
+    }
+    let kind: Kind
+    @EnvironmentObject var library: Library
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [String] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(items, id: \.self) { id in
+                    Text(kind == .favorites ? (library.shows[id]?.title ?? id) : id)
+                        .foregroundStyle(Theme.fg)
+                        .listRowBackground(Theme.surface)
+                }
+                .onMove { items.move(fromOffsets: $0, toOffset: $1) }
+                if !library.status.isEmpty {
+                    Text(library.status).font(.footnote).foregroundStyle(Theme.muted).listRowBackground(Theme.bg)
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .navigationTitle(kind == .favorites ? "Favorites order" : "Subject order")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.bg, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                if kind == .subjects {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Back to A to Z") {
+                            items.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                        }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        Task {
+                            if kind == .favorites { await library.setFavoriteOrder(items) } else { await library.setSubjectOrder(items) }
+                            if library.status.isEmpty { dismiss() }
+                        }
+                    }
+                    .disabled(library.busy)
+                }
+            }
+        }
+        .onAppear { items = kind == .favorites ? library.fav : library.subjects }
     }
 }
 
@@ -1083,6 +1160,30 @@ struct SettingsView: View {
     @State private var codeMode = false
     @State private var code = ""
     @State private var working = false
+    @State private var confirmMaster = false
+    @State private var masterSummary = ""
+    @State private var masterNote = ""
+
+    private func describe(_ s: Library.ListSummary) -> String {
+        "\(s.shows) shows, \(s.subjects) subjects, \(s.favorites) favorites"
+    }
+
+    private func askMaster() async {
+        masterNote = "Checking Dropbox…"
+        let mine = library.localSummary
+        guard mine.shows >= 2 else {
+            masterNote = "This iPhone has only \(mine.shows) show, so it doesn't look like your full list."
+            return
+        }
+        do {
+            let theirs = try await library.remoteSummary()
+            masterSummary = "On this iPhone: \(describe(mine)). On Dropbox now: \(describe(theirs)). Your other devices will show exactly this iPhone's shows, subjects, favorites order and settings, and shows not on this iPhone leave them too. Listening spots and played marks aren't affected. Earlier copies in the web app can bring back the one replaced."
+            masterNote = ""
+            confirmMaster = true
+        } catch {
+            masterNote = "Couldn't check Dropbox: \(error.localizedDescription)"
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -1120,7 +1221,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Dropbox")
                 } footer: {
-                    Text("This app reads the list the web app keeps in your Dropbox. It never changes that list.")
+                    Text("Your list lives in your Dropbox, shared with the web app. Changes made here go straight into Dropbox's current copy.")
                 }
                 .listRowBackground(Theme.surface)
 
@@ -1134,8 +1235,25 @@ struct SettingsView: View {
                     if !library.status.isEmpty {
                         Text(library.status).font(.footnote).foregroundStyle(Theme.muted)
                     }
+                    if dropbox.signedIn {
+                        Button("Use this iPhone's list everywhere") { Task { await askMaster() } }
+                            .disabled(library.busy)
+                    }
+                    if !masterNote.isEmpty {
+                        Text(masterNote).font(.footnote).foregroundStyle(Theme.muted)
+                    }
                 }
                 .listRowBackground(Theme.surface)
+                .confirmationDialog("Use this iPhone's list everywhere?", isPresented: $confirmMaster, titleVisibility: .visible) {
+                    Button("Yes, use this iPhone's list") {
+                        Task {
+                            let ok = await library.useThisListEverywhere()
+                            masterNote = ok ? "Dropbox now has this iPhone's list. Your other devices take it the next time they sync." : ""
+                        }
+                    }
+                } message: {
+                    Text(masterSummary)
+                }
 
                 Section {
                     Toggle("Download new Favorites episodes", isOn: $downloads.autoFavorites)
@@ -1146,7 +1264,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Downloads")
                 } footer: {
-                    Text("On Wi-Fi, the newest unplayed episode of each favorite downloads by itself, also while the app is closed when iOS allows. Any episode can be downloaded with its arrow.")
+                    Text("On Wi-Fi, each favorite's newest unplayed episodes download by themselves, up to the number set in the show's menu, also while the app is closed when iOS allows. Any episode can be downloaded with its arrow.")
                 }
                 .listRowBackground(Theme.surface)
 
@@ -1169,7 +1287,7 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    LabeledContent("Version", value: "0.7")
+                    LabeledContent("Version", value: "0.8")
                 }
                 .listRowBackground(Theme.surface)
             }

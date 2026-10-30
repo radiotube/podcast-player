@@ -26,6 +26,14 @@ final class Library: ObservableObject {
     var remotePos: [String: Double] = [:]
     var remotePlayed: [String: Double] = [:]
     var remotePosT: [String: Double] = [:]
+    /// The episode last played anywhere, in the web app's format, and when (ms).
+    private(set) var remoteNow: [String: Any]?
+    private(set) var remoteNowT: Double = 0
+    /// When this iPhone last started playing something (ms).
+    private var localNowT: Double = UserDefaults.standard.double(forKey: "nowT")
+    private var nowToSend: [String: Any]?
+    /// The list as last read from Dropbox, the one shown on screen.
+    private var lastRoot: [String: Any] = [:]
     var speed: Double = 1
     var skipBack: Double = 15
     var skipFwd: Double = 30
@@ -146,6 +154,9 @@ final class Library: ObservableObject {
         piSecret = J.str(pi["secret"])
         savedBy = J.str(root["by"])
         savedAt = J.str(root["at"])
+        remoteNow = root["now"] as? [String: Any]
+        remoteNowT = J.num(root["nowT"]) ?? 0
+        lastRoot = root
     }
 
     // MARK: Lists
@@ -385,6 +396,88 @@ final class Library: ObservableObject {
         }
     }
 
+    // MARK: Order
+
+    func setFavoriteOrder(_ order: [String]) async {
+        await edit { root in
+            let remote = ((root["fav"] as? [Any]) ?? []).map { J.str($0) }
+            var out = order.filter { remote.contains($0) }
+            out += remote.filter { !out.contains($0) }
+            root["fav"] = out
+        }
+    }
+
+    /// Subjects in this order, ahead of any kept from before (the web app keeps old ones so they come back in place).
+    func setSubjectOrder(_ order: [String]) async {
+        await edit { root in
+            var prefs = (root["prefs"] as? [String: Any]) ?? [:]
+            let old = ((prefs["catOrder"] as? [Any]) ?? []).map { J.str($0) }
+            prefs["catOrder"] = order + old.filter { !order.contains($0) }
+            root["prefs"] = prefs
+        }
+    }
+
+    // MARK: Use this iPhone's list everywhere
+
+    struct ListSummary { var shows = 0, subjects = 0, favorites = 0 }
+
+    static func summary(_ root: [String: Any]) -> ListSummary {
+        let subs = (root["subs"] as? [String: Any]) ?? [:]
+        var cats = Set<String>()
+        for raw in subs.values {
+            guard let o = raw as? [String: Any] else { continue }
+            for c in (o["cats"] as? [Any]) ?? [] { cats.insert(J.str(c)) }
+            if !J.str(o["cat"]).isEmpty { cats.insert(J.str(o["cat"])) }
+        }
+        return ListSummary(shows: subs.count, subjects: cats.count, favorites: ((root["fav"] as? [Any]) ?? []).count)
+    }
+
+    var localSummary: ListSummary { Library.summary(lastRoot) }
+
+    func remoteSummary() async throws -> ListSummary {
+        guard let got = try await dropbox.downloadSyncWithRev(),
+              let root = try JSONSerialization.jsonObject(with: got.data) as? [String: Any] else { return ListSummary() }
+        return Library.summary(root)
+    }
+
+    /// Like the web app's "Use this device's list everywhere": Dropbox gets the shows, subjects, favorites
+    /// order and settings shown on this iPhone, shows missing here get a dated unfollow note, and the
+    /// master mark tells every other device to take the list whole. Spots and played marks are left as they are.
+    func useThisListEverywhere() async -> Bool {
+        let mine = lastRoot
+        let mineSubs = (mine["subs"] as? [String: Any]) ?? [:]
+        guard mineSubs.count >= 2 else {
+            status = "This iPhone has fewer than 2 shows, so it doesn't look like your full list."
+            return false
+        }
+        guard let got = try? await dropbox.downloadSyncWithRev(),
+              let remote = try? JSONSerialization.jsonObject(with: got.data) as? [String: Any] else {
+            status = "Couldn't read Dropbox's list."
+            return false
+        }
+        let leaving = Set(((remote["subs"] as? [String: Any]) ?? [:]).keys).subtracting(mineSubs.keys)
+        let now = Library.nowMs
+        return await edit(removing: leaving) { root in
+            var unf = (root["unf"] as? [String: Any]) ?? [:]
+            let theirs = (root["subs"] as? [String: Any]) ?? [:]
+            var subs: [String: Any] = [:]
+            for (id, raw) in mineSubs {
+                guard var sh = raw as? [String: Any] else { continue }
+                if let u = J.num(unf[id]), u > (J.num(sh["fT"]) ?? 0) { sh["fT"] = now }
+                subs[id] = sh
+            }
+            for (id, raw) in theirs where subs[id] == nil {
+                let fT = J.num((raw as? [String: Any])?["fT"]) ?? 0
+                if (J.num(unf[id]) ?? 0) <= fT { unf[id] = now }
+            }
+            root["subs"] = subs
+            root["fav"] = mine["fav"] ?? [Any]()
+            if let p = mine["prefs"] { root["prefs"] = p }
+            root["unf"] = unf
+            root["master"] = now
+        }
+    }
+
     // MARK: Search
 
     var hasPodcastIndex: Bool { !piKey.isEmpty && !piSecret.isEmpty }
@@ -473,6 +566,37 @@ final class Library: ObservableObject {
         sendProgressSoon(delay: 3)
     }
 
+    /// Notes that this iPhone started playing an episode, for the web app to pick up.
+    func notePlaying(_ ep: Episode, showTitle: String, art: String) {
+        localNowT = Library.nowMsD
+        UserDefaults.standard.set(localNowT, forKey: "nowT")
+        var d: [String: Any] = ["g": ep.guid, "s": ep.showId, "t": ep.title, "u": ep.audioUrl,
+                                "a": ep.image.isEmpty ? art : ep.image, "show": showTitle,
+                                "len": ep.duration, "ch": ep.chaptersUrl]
+        if let date = ep.date { d["d"] = ISO8601DateFormatter().string(from: date) }
+        if let f = shows[ep.showId]?.feedUrl, !f.isEmpty { d["f"] = f }
+        nowToSend = d
+        sendProgressSoon(delay: 5)
+    }
+
+    /// The episode last played on another device, when that was after anything played here.
+    func episodeFromOtherDevice() -> (Episode, String, String)? {
+        guard let n = remoteNow, remoteNowT > localNowT else { return nil }
+        let g = J.str(n["g"]), u = J.str(n["u"])
+        guard !g.isEmpty, !u.isEmpty else { return nil }
+        let date = ISO8601DateFormatter().date(from: J.str(n["d"])) ?? RSSParser.parseDate(J.str(n["d"]))
+        let ep = Episode(guid: g, showId: J.str(n["s"]), title: J.str(n["t"]), date: date, audioUrl: u,
+                         duration: J.num(n["len"]) ?? 0, summary: "", image: J.str(n["a"]),
+                         chaptersUrl: J.str(n["ch"]), transcript: nil)
+        return (ep, J.str(n["show"]), J.str(n["a"]))
+    }
+
+    /// Taken up here, so it isn't offered again or sent back.
+    func tookOtherDevicesEpisode() {
+        localNowT = remoteNowT
+        UserDefaults.standard.set(localNowT, forKey: "nowT")
+    }
+
     private static var nowMsD: Double { (Date().timeIntervalSince1970 * 1000).rounded() }
 
     private func markUnsent(_ guid: String) {
@@ -492,8 +616,9 @@ final class Library: ObservableObject {
     /// Puts this iPhone's listening spots and played marks into Dropbox's list, where newer.
     /// Only the episodes changed here are touched; everything else in the file stays as it is.
     func sendProgress() async {
-        guard !unsent.isEmpty, dropbox.signedIn else { return }
+        guard !unsent.isEmpty || nowToSend != nil, dropbox.signedIn else { return }
         let guids = unsent
+        let nowItem = nowToSend, nowT = localNowT
         let lp = localPos, lt = localPosT, lpl = localPlayed
         let ok = await edit(quiet: true) { root in
             var pos = (root["pos"] as? [String: Any]) ?? [:]
@@ -512,8 +637,13 @@ final class Library: ObservableObject {
             root["pos"] = pos
             root["posT"] = posT
             root["played"] = played
+            if let nowItem, nowT > (J.num(root["nowT"]) ?? 0) {
+                root["now"] = nowItem
+                root["nowT"] = Int64(nowT)
+            }
         }
         if ok {
+            if nowToSend.map({ J.str($0["g"]) }) == nowItem.map({ J.str($0["g"]) }) { nowToSend = nil }
             unsent.subtract(guids)
             UserDefaults.standard.set(Array(unsent), forKey: "unsent")
         }
