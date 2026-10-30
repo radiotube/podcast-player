@@ -111,6 +111,8 @@ img{max-width:100%;display:block}
 .ep .facts dd{margin:0;overflow-wrap:anywhere}
 .ep .chapters h4,.ep .notes h4{margin:0 0 6px;font-size:15px}
 .ep .chapters ol{margin:0;padding-left:0;list-style:none;font-size:14px;display:flex;flex-direction:column;gap:3px}
+.ep .chapters li.cj{cursor:pointer;padding:3px 0}.ep .chapters li.cj:active{opacity:.6}.ep .chapters li.cj img{width:28px;height:28px;border-radius:4px;object-fit:cover;vertical-align:middle;margin-right:6px}
+#pChap{color:var(--accent);font-size:13px;margin-top:2px}
 .ep .chapters .t{color:var(--muted);font-variant-numeric:tabular-nums;display:inline-block;min-width:3.6em}
 .ep .notes{font-size:15px;line-height:1.5;overflow-wrap:anywhere}
 .ep .notes.plain{white-space:pre-line}
@@ -328,7 +330,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
       <button class="tx-now" id="txNow" hidden>Back to now</button>
     </div>
   </div>
-  <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div><div class="trim-info" id="trimInfo" hidden></div></div>
+  <div class="info"><div class="t" id="pTitle"></div><div class="s" id="pShow"></div><div id="pChap" hidden></div><div class="trim-info" id="trimInfo" hidden></div></div>
   <div class="scrub">
     <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Position">
     <div class="times"><span id="tCur">0:00</span><span id="tLeft">-0:00</span></div>
@@ -345,6 +347,7 @@ ol.steps{margin:0;padding-left:20px;color:var(--muted);font-size:15px;display:fl
     <label for="sleepSel">Sleep <span class="sleep-left" id="sleepLeft"></span>
       <select id="sleepSel"><option value="0">Off</option><option value="5">5 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="end">End of episode</option></select>
     </label>
+    <button class="pill-btn" id="chPrev" hidden>&#9664; Chapter</button><button class="pill-btn" id="chNext" hidden>Chapter &#9654;</button>
     <button class="pill-btn" id="txBtn" aria-pressed="false">Transcript</button>
     <button class="pill-btn" id="fsBtn" hidden>Full screen</button>
   </div>
@@ -1363,7 +1366,7 @@ function fillDetails(box, e, sh, close){
   box.appendChild(el("dl",{class:"facts"}, facts));
   if(!(e.tr && e.tr.length) && !e.v) box.appendChild(makeRow(e, sh));
   var chBox = null;
-  if(e.ch){ chBox = el("div",{class:"chapters"},[ el("h4",{text:"Chapters"}), el("p",{class:"note", text:"Loading chapters…"}) ]); box.appendChild(chBox); loadChapterList(e, chBox); }
+  if(e.ch){ chBox = el("div",{class:"chapters"},[ el("h4",{text:"Chapters"}), el("p",{class:"note", text:"Loading chapters…"}) ]); box.appendChild(chBox); loadChapterList(e, chBox, sh); }
   var notesWrap = el("div"); box.appendChild(notesWrap);
   var drawNotes = function(loading){
     notesWrap.innerHTML = "";
@@ -1414,11 +1417,12 @@ function makeRow(e, sh){
   return row;
 }
 var chapterLists = {};
-function loadChapterList(e, box){
+function loadChapterList(e, box, sh){
   var put = function(list){
     box.innerHTML = ""; box.appendChild(el("h4",{text:"Chapters"}));
     if(!list || !list.length){ box.appendChild(el("p",{class:"note", text: list ? "The chapter list is empty." : "Couldn't load the chapters."})); return; }
-    var ol = el("ol"); list.forEach(function(c){ ol.appendChild(el("li",null,[ el("span",{class:"t", text:fmt(c.startTime||0)}), document.createTextNode(" "+(c.title||"Chapter")) ])); });
+    var ol = el("ol"); list.forEach(function(c){ ol.appendChild(el("li",{class:"cj", role:"button", onclick:function(){ jumpChapter(e, c.startTime||0, sh); }},[ c.img ? el("img",{src:c.img, alt:"", loading:"lazy"}) : null, el("span",{class:"t", text:fmt(c.startTime||0)}), document.createTextNode(" "+(c.title||"Chapter")) ].filter(Boolean))); });
+    box.appendChild(el("p",{class:"note", text:"Tap a chapter to play from there."}));
     box.appendChild(ol);
   };
   if(chapterLists[e.ch]){ put(chapterLists[e.ch]); return; }
@@ -2030,6 +2034,7 @@ function playEp(e, autoplay, q, stayClosed){
   cur = {g:e.g, s:e.s, t:e.t, u:e.u, v:e.v, a:e.a||showObj.art||"", show:showObj.title, len:e.len||0, ch:e.ch||"", tr:e.tr||null, d:e.d||"", f:showObj.feedUrl||""};
   if(q !== undefined ? q : e.q) cur.q = q !== undefined ? q : e.q;
   S.now = cur; if(autoplay) S.nowT = Date.now(); save();
+  var jt = jumpTo; jumpTo = null; curChaps = []; chapIdx = -2; chapShow();
   ads = []; endSkipped = false; badLen = false; $("seek").disabled = false; resetTranscript();
   var useVideo = e.v || isVideo(e.ty, e.u);
   var other = useVideo ? audio : video; other.pause(); other.removeAttribute("src"); try{ other.load(); }catch(x){}
@@ -2044,9 +2049,9 @@ function playEp(e, autoplay, q, stayClosed){
   var intro = showObj.skipStart||0;
   media.addEventListener("loadedmetadata", function once(){
     media.removeEventListener("loadedmetadata", once);
-    var start = S.pos[e.g]||0, target = start>5 ? start : 0;
+    var start = jt!=null ? jt : S.pos[e.g]||0, target = jt!=null ? jt : start>5 ? start : 0;
     var d = dur();
-    if(intro && target < intro && (!d || intro < d-30)){ target = intro; if(autoplay) toast("Skipped the first "+fmtSecs(intro)); }
+    if(jt==null && intro && target < intro && (!d || intro < d-30)){ target = intro; if(autoplay) toast("Skipped the first "+fmtSecs(intro)); }
     if(target>0 && (!d || target < d-10)){ wantAt = target; progSeek = true; try{ media.currentTime = target; }catch(x){ progSeek = false; } }
     media.playbackRate = S.speed||1;
   });
@@ -2057,10 +2062,44 @@ function playEp(e, autoplay, q, stayClosed){
   if(autoplay){ var p = media.play(); if(p && p.catch) p.catch(function(){ setPlayIcons(); }); if(!stayClosed) openPlayer(); }
   setMediaSession();  trimStart();
 }
+/* Chapters of the playing episode: tap one in an episode's details to play from there, step with the
+   Chapter buttons in the player, and see each chapter's own picture (as No Agenda uses) in place of
+   the episode art, on the lock screen too. A chapter without a picture shows the episode art. */
+var jumpTo = null, curChaps = [], chapIdx = -2;
+function jumpChapter(e, t, sh){
+  if(cur && cur.g===e.g){ try{ media.currentTime = t; }catch(x){} var p = media.play(); if(p && p.catch) p.catch(function(){}); openPlayer(); return; }
+  e.a = e.a || (sh && sh.art); jumpTo = t; playEp(e, true, sh ? {s:sh.id} : undefined);
+}
+function navChaps(){ return curChaps.filter(function(c){ return c.toc!==false && c.startTime!=null; }); }
+function chapAt(list, t){ var i = -1; for(var k=0;k<list.length;k++){ if((list[k].startTime||0) <= t+0.5) i = k; else break; } return i; }
+function chapImg(){ var c = curChaps[chapIdx]; return c && c.img ? c.img : ""; }
+function msArt(){ var a = chapImg() || (cur && cur.a); return a ? [{src:a, sizes:"600x600"}] : []; }
+function chapShow(){
+  var nav = navChaps(), c = nav[chapAt(nav, media.currentTime||0)], img = chapImg() || (cur && cur.a) || "";
+  $("pChap").hidden = !c; $("pChap").textContent = c ? c.title||"" : "";
+  $("chPrev").hidden = $("chNext").hidden = nav.length < 2;
+  if(cur && $("bigArt").getAttribute("src") !== img){ $("bigArt").src = img; $("miniArt").src = img; }
+}
+function chapTick(t){
+  if(!cur) return;
+  var i = chapAt(curChaps, t), nav = navChaps(), n = chapAt(nav, t), key = i+"/"+n;
+  if(key === chapIdx+"/"+chapTick.n) return;
+  chapIdx = i; chapTick.n = n; chapShow();
+  if("mediaSession" in navigator && navigator.mediaSession.metadata) try{ navigator.mediaSession.metadata = new MediaMetadata({title:cur.t, artist:cur.show||"", album:cur.show||"", artwork: msArt()}); }catch(e){}
+}
+function chapStep(d){
+  var nav = navChaps(), t = media.currentTime||0, i = chapAt(nav, t);
+  if(d < 0 && i >= 0 && t - (nav[i].startTime||0) > 3) d = 0;
+  var c = nav[Math.max(0, Math.min(nav.length-1, i+d))]; if(!c) return;
+  try{ media.currentTime = c.startTime||0; }catch(x){}
+}
+$("chPrev").onclick = function(){ chapStep(-1); }; $("chNext").onclick = function(){ chapStep(1); };
+$("bigArt").addEventListener("error", function(){ if(cur && cur.a && this.getAttribute("src") !== cur.a){ this.src = cur.a; $("miniArt").src = cur.a; } });
 function loadChapters(c){
   fetch(c.ch).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(j){
     if(!cur || cur.g!==c.g) return;
     var list = (j.chapters||[]).slice().sort(function(a,b){return a.startTime-b.startTime;});
+    curChaps = list; chapIdx = -2; chapTick(media.currentTime||0);
     ads = list.map(function(ch, i){
       if(!AD_RE.test(ch.title||"")) return null;
       var end = ch.endTime || (list[i+1] ? list[i+1].startTime : 0);
@@ -2139,7 +2178,7 @@ function onTime(){
   if(S.adSkip && ads.length && !media.paused){
     for(var i=0;i<ads.length;i++){ var a = ads[i]; var end = a.e || d; if(t >= a.s && t < end-0.5){ try{ media.currentTime = end; }catch(e){} toast("Skipped "+(a.t||"ad")); return; } }
   }
-  trimTick(t);
+  trimTick(t); chapTick(t);
   var outro = (showOf(cur && cur.s).skipEnd)||0;
   if(outro && d && !endSkipped && !media.paused && t >= d - outro && d > outro + 30){ endSkipped = true; toast("Skipped the last "+fmtSecs(outro)); if(!finishEpisode()) media.pause(); return; }
   $("seek").disabled = !d;
@@ -2419,7 +2458,7 @@ function remoteText(){
 function setMediaSession(){
   if(!("mediaSession" in navigator) || !cur) return;
   try{
-    navigator.mediaSession.metadata = new MediaMetadata({title:cur.t, artist:cur.show||"", album:cur.show||"", artwork: cur.a? [{src:cur.a, sizes:"600x600", type:"image/jpeg"}] : []});
+    navigator.mediaSession.metadata = new MediaMetadata({title:cur.t, artist:cur.show||"", album:cur.show||"", artwork: msArt()});
     var ms = navigator.mediaSession;
     var set = function(a,f){ try{ ms.setActionHandler(a,f); }catch(e){} };
     set("play", function(){ remoteAct("play"); }); set("pause", function(){ remoteAct("pause"); });
@@ -3343,7 +3382,7 @@ function lsSet(k, v){ try{ if(v==null) localStorage.removeItem(k); else localSto
 function dbxKey(){ var o = null; try{ o = localStorage.getItem("pp.dbx.key"); }catch(e){} return DBX_APP_KEY || o || ""; }
 var dbx = lsGet(DBX_AUTH);
 var sync = {busy:null, again:false, timer:null, msg:"", err:false, at:0, sent:"", orphan:"", rev:"", by:"", byAt:""};
-var APP_VER = 46;
+var APP_VER = 47;
 /* A short name for this browser, written into sync.json so it's clear which device saved Dropbox's copy last. */
 function deviceLabel(){
   var u = navigator.userAgent||"", mobile = /iPhone|iPod/.test(u) ? "iPhone" : (/iPad/.test(u) || (/Macintosh/.test(u) && navigator.maxTouchPoints > 1)) ? "iPad" : /Android/.test(u) ? "Android" : "";
