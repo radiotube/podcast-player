@@ -177,12 +177,16 @@ final class RSSParser: NSObject, XMLParserDelegate {
         return ISO8601DateFormatter().date(from: t)
     }
 
+    /// The show notes as plain text, keeping paragraph breaks.
     static func plain(_ html: String) -> String {
-        var s = html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        var s = html.replacingOccurrences(of: "(?i)<br\\s*/?>|</p>|</li>|</h[1-6]>", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
         let entities = ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'", "&nbsp;": " ", "&#8217;": "'", "&#8220;": "\"", "&#8221;": "\""]
         for (k, v) in entities { s = s.replacingOccurrences(of: k, with: v) }
-        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: "[ \\t\\r\\f]+", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: " ?\n ?", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(s.prefix(400))
+        return String(s.prefix(6000))
     }
 }

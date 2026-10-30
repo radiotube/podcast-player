@@ -546,6 +546,7 @@ struct EpisodeRow: View {
     @EnvironmentObject var library: Library
     @EnvironmentObject var player: Player
     @EnvironmentObject var downloads: Downloads
+    @State private var open = false
 
     var body: some View {
         let played = library.isPlayed(ep.guid)
@@ -561,15 +562,32 @@ struct EpisodeRow: View {
                 Text(detail(played: played, current: current))
                     .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(current ? Theme.accent : Theme.muted)
-                Text(ep.title)
-                    .font(.system(size: 16, weight: played ? Font.Weight.medium : Font.Weight.semibold))
-                    .foregroundStyle(played ? Theme.muted : Theme.fg)
-                    .lineLimit(3)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { open.toggle() }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(ep.title)
+                            .font(.system(size: 16, weight: played ? Font.Weight.medium : Font.Weight.semibold))
+                            .foregroundStyle(played ? Theme.muted : Theme.fg)
+                            .lineLimit(open ? nil : 3)
+                            .multilineTextAlignment(.leading)
+                        if !ep.summary.isEmpty {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.muted)
+                                .rotationEffect(.degrees(open ? 90 : 0))
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(open ? "Hides the description" : "Shows the full description")
                 if !ep.summary.isEmpty {
                     Text(ep.summary)
                         .font(.system(size: 14))
-                        .foregroundStyle(Theme.muted)
-                        .lineLimit(2)
+                        .foregroundStyle(open ? Theme.fg : Theme.muted)
+                        .lineLimit(open ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: open)
+                        .textSelection(.enabled)
                 }
             }
             Spacer(minLength: 0)
@@ -1123,7 +1141,7 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    LabeledContent("Version", value: "0.5")
+                    LabeledContent("Version", value: "0.6")
                 }
                 .listRowBackground(Theme.surface)
             }
