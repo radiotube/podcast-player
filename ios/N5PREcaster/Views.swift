@@ -64,7 +64,7 @@ struct ContentView: View {
                         } else {
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach(items) { item in
-                                    EpisodeRow(ep: item.episode, show: item.show, showName: true)
+                                    EpisodeRow(ep: item.episode, show: item.show, showName: true, subject: filter)
                                     Rectangle().fill(Theme.line).frame(height: 1)
                                 }
                             }
@@ -648,6 +648,7 @@ struct EpisodeRow: View {
     let ep: Episode
     let show: Show
     var showName = false
+    var subject: String? = nil
     @EnvironmentObject var library: Library
     @EnvironmentObject var player: Player
     @EnvironmentObject var downloads: Downloads
@@ -698,7 +699,7 @@ struct EpisodeRow: View {
             Spacer(minLength: 0)
             DownloadButton(ep: ep)
             Button {
-                if current { player.toggle() } else { player.play(ep, show: show) }
+                if current { player.toggle() } else { player.play(ep, show: show, subject: subject) }
             } label: {
                 PlayCircle(playing: current && player.isPlaying, ghost: !current)
             }
@@ -1164,6 +1165,11 @@ struct SettingsView: View {
     @State private var masterSummary = ""
     @State private var masterNote = ""
 
+    /// A setting that saves to Dropbox when changed.
+    private func prefBinding<T>(_ value: T, _ key: String) -> Binding<T> {
+        Binding(get: { value }, set: { v in Task { await library.setPref(key, v) } })
+    }
+
     private func describe(_ s: Library.ListSummary) -> String {
         "\(s.shows) shows, \(s.subjects) subjects, \(s.favorites) favorites"
     }
@@ -1280,14 +1286,31 @@ struct SettingsView: View {
                 }
                 .listRowBackground(Theme.surface)
 
-                Section("Playback") {
-                    LabeledContent("Skip back", value: "\(Int(library.skipBack)) seconds")
-                    LabeledContent("Skip forward", value: "\(Int(library.skipFwd)) seconds")
+                Section {
+                    Picker("Skip back", selection: prefBinding(library.skipBack, "skipBack")) {
+                        ForEach([5, 10, 15, 20, 30, 45, 60], id: \.self) { Text("\($0) sec").tag(Double($0)) }
+                    }
+                    Picker("Skip forward", selection: prefBinding(library.skipFwd, "skipFwd")) {
+                        ForEach([10, 15, 30, 45, 60, 90, 120], id: \.self) { Text("\($0) sec").tag(Double($0)) }
+                    }
+                    Toggle("Play the next one when an episode ends", isOn: prefBinding(library.autoNext, "autoNext"))
+                    Toggle("Skip ads marked in chapters", isOn: prefBinding(library.adSkip, "adSkip"))
+                    Toggle("Trim long pauses", isOn: prefBinding(library.trim, "trim"))
+                    if library.trim {
+                        Picker("Pauses longer than", selection: prefBinding(library.trimMin, "trimMin")) {
+                            ForEach([0.75, 1, 1.5, 2, 3], id: \.self) { v in Text("\(v.formatted()) sec").tag(v) }
+                        }
+                    }
+                } header: {
+                    Text("Playback")
+                } footer: {
+                    Text("Shared with the web app through Dropbox. The next episode comes from the subject you started in, or else the same show. On the iPhone, pauses are found from the episode's transcript, so trimming works on episodes that have one.")
                 }
                 .listRowBackground(Theme.surface)
+                .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "0.8")
+                    LabeledContent("Version", value: "0.9")
                 }
                 .listRowBackground(Theme.surface)
             }

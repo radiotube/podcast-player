@@ -35,8 +35,13 @@ final class Library: ObservableObject {
     /// The list as last read from Dropbox, the one shown on screen.
     private var lastRoot: [String: Any] = [:]
     var speed: Double = 1
-    var skipBack: Double = 15
-    var skipFwd: Double = 30
+    @Published var skipBack: Double = 15
+    @Published var skipFwd: Double = 30
+    /// The web app's playback settings, shared through Dropbox.
+    @Published var autoNext = true
+    @Published var adSkip = true
+    @Published var trim = false
+    @Published var trimMin: Double = 1
     /// The web app's Past episodes per show (0 means all).
     var epCap = 0
     private var piKey = ""
@@ -147,6 +152,10 @@ final class Library: ObservableObject {
         if let s = J.num(prefs["speed"]), s > 0 { speed = s }
         if let s = J.num(prefs["skipBack"]), s > 0 { skipBack = s }
         if let s = J.num(prefs["skipFwd"]), s > 0 { skipFwd = s }
+        autoNext = (prefs["autoNext"] as? Bool) ?? true
+        adSkip = (prefs["adSkip"] as? Bool) ?? true
+        trim = (prefs["trim"] as? Bool) ?? false
+        if let m = J.num(prefs["trimMin"]), m > 0 { trimMin = m }
         catOrder = ((prefs["catOrder"] as? [Any]) ?? []).map { J.str($0) }
         epCap = Int(J.num(prefs["epCap"]) ?? 0)
         let pi = (root["pi"] as? [String: Any]) ?? [:]
@@ -394,6 +403,28 @@ final class Library: ObservableObject {
                 root["prefs"] = prefs
             }
         }
+    }
+
+    // MARK: Settings
+
+    /// Changes one of the web app's shared settings (prefs) in Dropbox.
+    func setPref(_ key: String, _ value: Any) async {
+        await edit { root in
+            var prefs = (root["prefs"] as? [String: Any]) ?? [:]
+            prefs[key] = value
+            root["prefs"] = prefs
+        }
+    }
+
+    /// What plays when an episode ends: the next unplayed one in the subject it was started from,
+    /// or else in its show, in the order the lists show them.
+    func nextEpisode(after ep: Episode, subject: String?) -> (Episode, Show)? {
+        if let subject {
+            return unplayed(in: subject).first { $0.episode.guid != ep.guid }.map { ($0.episode, $0.show) }
+        }
+        guard let show = shows[ep.showId],
+              let next = episodes[ep.showId]?.first(where: { !isPlayed($0.guid) && $0.guid != ep.guid }) else { return nil }
+        return (next, show)
     }
 
     // MARK: Order

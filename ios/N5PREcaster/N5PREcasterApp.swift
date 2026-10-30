@@ -17,7 +17,9 @@ struct N5PREcasterApp: App {
         _dropbox = StateObject(wrappedValue: d)
         _library = StateObject(wrappedValue: l)
         _player = StateObject(wrappedValue: p)
-        _transcripts = StateObject(wrappedValue: Transcripts(library: l))
+        let t = Transcripts(library: l)
+        p.transcriptLines = { ep in await t.find(ep)?.segs }
+        _transcripts = StateObject(wrappedValue: t)
     }
 
     var body: some Scene {

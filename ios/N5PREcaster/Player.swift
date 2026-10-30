@@ -32,6 +32,14 @@ final class Player: ObservableObject {
     private var artKey = ""
     private var artCache: [String: UIImage] = [:]
     private var lastChapterStart: Double?
+    /// The subject an episode was started from, for playing the next one.
+    private var queueSubject: String?
+    /// Chapters whose titles mark ads (start, end; end 0 = to the end).
+    private var adRanges: [(s: Double, e: Double)] = []
+    /// Pauses found in the episode's transcript (start, end).
+    private var gaps: [(s: Double, e: Double)] = []
+    /// Set by the app: a transcript's lines for an episode, if one exists.
+    var transcriptLines: (@MainActor (Episode) async -> [Seg]?)?
 
     var skipBack: Double { library.skipBack }
     var skipFwd: Double { library.skipFwd }
@@ -57,11 +65,15 @@ final class Player: ObservableObject {
 
     // MARK: Controls
 
-    func play(_ ep: Episode, show: Show) {
+    func play(_ ep: Episode, show: Show, subject: String? = nil) {
+        queueSubject = subject
         if now?.episode.guid == ep.guid {
             if !isPlaying { play() }
             return
         }
+        adRanges = []
+        gaps = []
+        Task { await loadGaps(ep) }
         savePosition()
         now = NowItem(episode: ep, showTitle: show.title, showArt: show.art)
         if let data = try? JSONEncoder().encode(now) { UserDefaults.standard.set(data, forKey: "now") }
@@ -102,6 +114,10 @@ final class Player: ObservableObject {
             return
         }
         savePosition()
+        queueSubject = nil
+        adRanges = []
+        gaps = []
+        Task { await loadGaps(ep) }
         now = NowItem(episode: ep, showTitle: showTitle, showArt: art)
         if let data = try? JSONEncoder().encode(now) { UserDefaults.standard.set(data, forKey: "now") }
         chapters = []
@@ -181,6 +197,45 @@ final class Player: ObservableObject {
         guard now?.episode.guid == ep.guid else { return }
         chapters = list
         updateChapterArt()
+        let adWords = "\\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?|pre-?roll|mid-?roll|post-?roll|ad break)\\b"
+        adRanges = list.enumerated().compactMap { i, ch in
+            guard ch.title.range(of: adWords, options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+            return (ch.start, i + 1 < list.count ? list[i + 1].start : 0)
+        }
+    }
+
+    /// Long pauses come from the transcript's timing: the gaps between spoken lines.
+    private func loadGaps(_ ep: Episode) async {
+        guard let lines = await transcriptLines?(ep), now?.episode.guid == ep.guid else { return }
+        var out: [(s: Double, e: Double)] = []
+        for i in 1..<max(1, lines.count) where lines[i].s > lines[i - 1].e {
+            out.append((lines[i - 1].e, lines[i].s))
+        }
+        gaps = out
+    }
+
+    /// Skips ad chapters and the middle of long pauses, like the web app (keeps 0.3 s before, 0.2 s after).
+    private func skipAhead(_ t: Double) {
+        guard isPlaying, pendingSeek == nil else { return }
+        if library.adSkip {
+            for a in adRanges {
+                let end = a.e > 0 ? a.e : duration
+                if t >= a.s && t < end - 0.5 {
+                    seek(end)
+                    return
+                }
+            }
+        }
+        if library.trim {
+            let min = library.trimMin
+            for g in gaps where g.e - g.s >= min {
+                if g.s > t + 1 { break }
+                if t >= g.s + 0.25 && t < g.e - 0.45 {
+                    seek(g.e - 0.2)
+                    return
+                }
+            }
+        }
     }
 
     // MARK: Internals
@@ -224,7 +279,7 @@ final class Player: ObservableObject {
     }
 
     private func observe() {
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] t in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] t in
             let s = t.seconds
             MainActor.assumeIsolated { self?.tick(s) }
         }
@@ -253,6 +308,7 @@ final class Player: ObservableObject {
         time = s
         if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0, d != duration { duration = d }
         updateChapterArt()
+        skipAhead(s)
         if isPlaying && Date().timeIntervalSince(lastSave) > 10 { savePosition() }
     }
 
@@ -275,6 +331,9 @@ final class Player: ObservableObject {
         time = 0
         library.setPlayed(n.episode.guid, true)
         updateNowPlaying()
+        if library.autoNext, let next = library.nextEpisode(after: n.episode, subject: queueSubject) {
+            play(next.0, show: next.1, subject: queueSubject)
+        }
     }
 
     func savePosition() {
