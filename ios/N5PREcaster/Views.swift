@@ -10,7 +10,9 @@ struct ContentView: View {
     @EnvironmentObject var transcripts: Transcripts
     @State private var filter = ""
     @State private var showSettings = false
-
+    @State private var showAdd = false
+    @State private var renaming = ""
+    @State private var newName = ""
 
     var body: some View {
         NavigationStack {
@@ -22,6 +24,12 @@ struct ContentView: View {
                                 Chip(title: "All", on: filter.isEmpty) { filter = "" }
                                 ForEach(library.subjects, id: \.self) { c in
                                     Chip(title: c, on: filter == c) { filter = c }
+                                        .contextMenu {
+                                            Button {
+                                                renaming = c
+                                                newName = c
+                                            } label: { Label("Rename subject", systemImage: "pencil") }
+                                        }
                                 }
                             }
                         }
@@ -93,10 +101,29 @@ struct ContentView: View {
             .navigationDestination(for: Show.self) { ShowView(show: $0) }
             .toolbarBackground(Theme.bg, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showAdd = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Add a show")
+                        .disabled(!dropbox.signedIn)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
                         .accessibilityLabel("Settings")
                 }
+            }
+            .alert("Rename subject", isPresented: Binding(get: { !renaming.isEmpty }, set: { if !$0 { renaming = "" } })) {
+                TextField("Subject", text: $newName)
+                Button("Rename") {
+                    let old = renaming, name = newName.trimmingCharacters(in: .whitespaces)
+                    renaming = ""
+                    Task {
+                        await library.renameSubject(old, to: name)
+                        if filter == old && library.subjects.contains(name) { filter = name }
+                    }
+                }
+                Button("Cancel", role: .cancel) { renaming = "" }
+            } message: {
+                Text("Renames it on every show, on all your devices.")
             }
             .refreshable { await library.refreshAll(force: true) }
             .task(id: filter) {
@@ -113,6 +140,12 @@ struct ContentView: View {
                 .environmentObject(library)
                 .environmentObject(library.downloads)
                 .environmentObject(transcripts)
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+        }
+        .sheet(isPresented: $showAdd) {
+            AddShowView()
+                .environmentObject(library)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
@@ -239,9 +272,22 @@ func skipSymbol(_ seconds: Double, forward: Bool) -> String {
 // MARK: Show
 
 struct ShowView: View {
-    let show: Show
+    let start: Show
     @EnvironmentObject var library: Library
+    @Environment(\.dismiss) private var dismiss
     @State private var tab = 0
+    @State private var confirmRemove = false
+    @State private var editSubjects = false
+
+    init(show: Show) { start = show }
+
+    /// The show as it is in the list now, so changes made here show at once.
+    private var show: Show { library.shows[start.id] ?? start }
+    private var isFav: Bool { library.fav.contains(show.id) }
+    private var keepChoice: Binding<Int> {
+        Binding(get: { show.dlKeep ?? -1 },
+                set: { v in Task { await library.setKeep(show.id, v < 0 ? nil : v) } })
+    }
 
     private var episodes: [Episode] { library.episodes[show.id] ?? [] }
     private var shown: [Episode] { tab == 0 ? episodes.filter { !library.isPlayed($0.guid) } : episodes }
@@ -259,6 +305,10 @@ struct ShowView: View {
                             Text(show.author).font(.system(size: 14)).foregroundStyle(Theme.muted)
                         }
                     }
+                }
+
+                if !library.status.isEmpty {
+                    Text(library.status).font(.system(size: 14)).foregroundStyle(Theme.muted)
                 }
 
                 Segmented(options: ["New to me", "Recent"], selection: $tab)
@@ -289,6 +339,203 @@ struct ShowView: View {
         .toolbarBackground(Theme.bg, for: .navigationBar)
         .task { await library.loadEpisodes(show) }
         .refreshable { await library.loadEpisodes(show, force: true) }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if library.shows[start.id] != nil {
+                    Menu {
+                        Button {
+                            Task { await library.setFavorite(show.id, !isFav) }
+                        } label: {
+                            Label(isFav ? "Remove from Favorites" : "Add to Favorites", systemImage: isFav ? "star.slash" : "star")
+                        }
+                        Picker(selection: keepChoice) {
+                            Text("Past episodes per show (\(library.epCap > 0 ? library.epCap : 3))").tag(-1)
+                            Text("None").tag(0)
+                            ForEach([1, 2, 3, 5, 10], id: \.self) { n in Text("\(n)").tag(n) }
+                        } label: {
+                            Label("Downloads to keep: \(library.keepCount(show))", systemImage: "arrow.down.circle")
+                        }
+                        .pickerStyle(.menu)
+                        Button { editSubjects = true } label: { Label("Subjects", systemImage: "tag") }
+                        Divider()
+                        Button(role: .destructive) { confirmRemove = true } label: { Label("Remove show", systemImage: "trash") }
+                    } label: {
+                        Image(systemName: library.busy ? "hourglass" : "ellipsis.circle")
+                    }
+                    .disabled(library.busy)
+                }
+            }
+        }
+        .confirmationDialog("Remove \(show.title)?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove show", role: .destructive) {
+                Task {
+                    await library.removeShow(show.id)
+                    if library.shows[start.id] == nil { dismiss() }
+                }
+            }
+        } message: {
+            Text("It leaves your list on all your devices.")
+        }
+        .sheet(isPresented: $editSubjects) {
+            SubjectsEditor(showId: show.id, chosen: show.cats)
+                .environmentObject(library)
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+        }
+    }
+}
+
+/// Picks the subjects a show sits under, or adds a new one.
+struct SubjectsEditor: View {
+    let showId: String
+    @State var chosen: [String]
+    @EnvironmentObject var library: Library
+    @Environment(\.dismiss) private var dismiss
+    @State private var newSubject = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Array(Set(library.subjects + chosen)).sorted(), id: \.self) { c in
+                        Button {
+                            if chosen.contains(c) { chosen.removeAll { $0 == c } } else { chosen.append(c) }
+                        } label: {
+                            HStack {
+                                Text(c).foregroundStyle(Theme.fg)
+                                Spacer()
+                                if chosen.contains(c) { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }
+                            }
+                        }
+                    }
+                    HStack {
+                        TextField("New subject", text: $newSubject)
+                            .onSubmit(addNew)
+                        Button("Add", action: addNew)
+                            .disabled(newSubject.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                .listRowBackground(Theme.surface)
+                if !library.status.isEmpty {
+                    Text(library.status).font(.footnote).foregroundStyle(Theme.muted).listRowBackground(Theme.bg)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .navigationTitle("Subjects")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.bg, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        addNew()
+                        Task {
+                            await library.setSubjects(showId, chosen)
+                            if library.status.isEmpty { dismiss() }
+                        }
+                    }
+                    .disabled(library.busy)
+                }
+            }
+        }
+    }
+
+    private func addNew() {
+        let c = newSubject.trimmingCharacters(in: .whitespaces)
+        if !c.isEmpty && !chosen.contains(c) { chosen.append(c) }
+        newSubject = ""
+    }
+}
+
+/// Finds shows on Podcast Index (or Apple's directory) and adds them to the list.
+struct AddShowView: View {
+    @EnvironmentObject var library: Library
+    @Environment(\.dismiss) private var dismiss
+    @State private var term = ""
+    @State private var results: [FoundShow] = []
+    @State private var searching = false
+    @State private var note = ""
+    @State private var subject = ""
+    @State private var newSubject = ""
+    @State private var added: Set<String> = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    TextField("Search for a show", text: $term)
+                        .submitLabel(.search)
+                        .onSubmit(run)
+                    Picker("Subject", selection: $subject) {
+                        Text("None").tag("")
+                        ForEach(library.subjects, id: \.self) { Text($0).tag($0) }
+                    }
+                    TextField("Or a new subject", text: $newSubject)
+                } footer: {
+                    Text(library.hasPodcastIndex ? "Searches Podcast Index, then Apple's directory." : "Searches Apple's directory. Add your Podcast Index key in the web app to search there first.")
+                }
+                .listRowBackground(Theme.surface)
+
+                if searching { ProgressView().frame(maxWidth: .infinity).listRowBackground(Theme.bg) }
+                if !note.isEmpty { Text(note).foregroundStyle(Theme.muted).listRowBackground(Theme.bg) }
+                if !library.status.isEmpty { Text(library.status).font(.footnote).foregroundStyle(Theme.muted).listRowBackground(Theme.bg) }
+
+                ForEach(results) { f in
+                    HStack(spacing: 12) {
+                        ArtView(url: f.art, size: 52, radius: 8)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(f.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.fg).lineLimit(2)
+                            Text(f.author.isEmpty ? f.source : "\(f.author) · \(f.source)")
+                                .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+                        }
+                        Spacer()
+                        if added.contains(f.id) || library.isFollowed(f) {
+                            Image(systemName: "checkmark").foregroundStyle(Theme.muted)
+                        } else {
+                            Button("Add") {
+                                let subj = newSubject.trimmingCharacters(in: .whitespaces).isEmpty ? subject : newSubject
+                                Task {
+                                    await library.addShow(f, subject: subj)
+                                    if library.isFollowed(f) { added.insert(f.id) }
+                                }
+                            }
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.accentInk)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 36)
+                            .background(Capsule().fill(Theme.accent))
+                            .buttonStyle(.plain)
+                            .disabled(library.busy)
+                        }
+                    }
+                    .listRowBackground(Theme.bg)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .navigationTitle("Add a show")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.bg, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+        }
+    }
+
+    private func run() {
+        let q = term
+        searching = true
+        note = ""
+        Task {
+            do {
+                results = try await library.search(q)
+                if results.isEmpty { note = "No shows found." }
+            } catch {
+                note = "Search didn't work: \(error.localizedDescription)"
+            }
+            searching = false
+        }
     }
 }
 
@@ -876,7 +1123,7 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    LabeledContent("Version", value: "0.4")
+                    LabeledContent("Version", value: "0.5")
                 }
                 .listRowBackground(Theme.surface)
             }

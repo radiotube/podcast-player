@@ -26,6 +26,8 @@ final class Downloads: ObservableObject {
     /// Told when a download finishes, so a transcript can be made for it.
     var onFinished: ((String) -> Void)?
     private var skipped: Set<String>
+    /// Downloads that started by themselves, which the per-show limit may remove.
+    private(set) var auto: Set<String>
     private var session: URLSession!
     private let delegate = DownloadDelegate()
     private let monitor = NWPathMonitor()
@@ -36,6 +38,7 @@ final class Downloads: ObservableObject {
         autoFavorites = d.object(forKey: "dl.auto") as? Bool ?? true
         deleteAfter = d.object(forKey: "dl.deleteAfter") as? Bool ?? true
         skipped = Set(d.stringArray(forKey: "dl.skipped") ?? [])
+        auto = Set(d.stringArray(forKey: "dl.autoSet") ?? [])
         let saved = d.dictionary(forKey: "dl.files") as? [String: String] ?? [:]
         files = saved.filter { FileManager.default.fileExists(atPath: Downloads.folder.appendingPathComponent($0.value).path) }
 
@@ -91,8 +94,10 @@ final class Downloads: ObservableObject {
 
     // MARK: Doing
 
-    func start(_ ep: Episode) {
+    func start(_ ep: Episode, byItself: Bool = false) {
         guard files[ep.guid] == nil, progress[ep.guid] == nil, let url = URL(string: ep.audioUrl) else { return }
+        if byItself { auto.insert(ep.guid) } else { auto.remove(ep.guid) }
+        UserDefaults.standard.set(Array(auto), forKey: "dl.autoSet")
         let task = session.downloadTask(with: url)
         task.taskDescription = ep.guid
         progress[ep.guid] = 0
@@ -106,7 +111,7 @@ final class Downloads: ObservableObject {
     func autoStart(_ ep: Episode) {
         guard autoFavorites, onWifi, !skipped.contains(ep.guid), failed[ep.guid] == nil else { return }
         if let d = ep.date, Date().timeIntervalSince(d) > 30 * 86400 { return }
-        start(ep)
+        start(ep, byItself: true)
     }
 
     func cancel(_ guid: String) {
@@ -124,6 +129,7 @@ final class Downloads: ObservableObject {
         try? FileManager.default.removeItem(at: Downloads.folder.appendingPathComponent(name))
         files[guid] = nil
         saveFiles()
+        if auto.remove(guid) != nil { UserDefaults.standard.set(Array(auto), forKey: "dl.autoSet") }
         if byUser {
             skipped.insert(guid)
             saveSkipped()

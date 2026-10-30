@@ -8,6 +8,20 @@ struct Show: Identifiable, Hashable {
     var art: String
     var cats: [String]
     var itunesId: String
+    /// How many recent downloads to keep for this show; nil uses Past episodes per show.
+    var dlKeep: Int? = nil
+}
+
+/// A show found by search, before it's added.
+struct FoundShow: Identifiable, Hashable {
+    let id: String
+    let itunesId: Int?
+    let piId: Int?
+    let title: String
+    let author: String
+    let feedUrl: String
+    let art: String
+    let source: String
 }
 
 struct Episode: Identifiable, Hashable, Codable {

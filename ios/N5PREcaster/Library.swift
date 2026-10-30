@@ -1,7 +1,8 @@
 import Foundation
+import CryptoKit
 
-/// Shows, subjects and favorites, read from the web app's sync.json in Dropbox.
-/// This build only reads Dropbox. It never uploads, so it can't change the web app's list.
+/// Shows, subjects and favorites, from the web app's sync.json in Dropbox.
+/// Edits made here are saved straight into Dropbox's current copy (see edit), never from a copy kept here.
 @MainActor
 final class Library: ObservableObject {
     @Published var shows: [String: Show] = [:]
@@ -22,6 +23,10 @@ final class Library: ObservableObject {
     var speed: Double = 1
     var skipBack: Double = 15
     var skipFwd: Double = 30
+    /// The web app's Past episodes per show (0 means all).
+    var epCap = 0
+    private var piKey = ""
+    private var piSecret = ""
     private var lastRefresh = Date.distantPast
     private var lastFavCheck = Date.distantPast
 
@@ -101,7 +106,8 @@ final class Library: ObservableObject {
                             feedUrl: J.str(o["feedUrl"]),
                             art: J.str(o["art"]),
                             cats: cats,
-                            itunesId: J.str(o["itunesId"]))
+                            itunesId: J.str(o["itunesId"]),
+                            dlKeep: J.num(o["dlKeep"]).map { Int($0) })
         }
         shows = out
         fav = ((root["fav"] as? [Any]) ?? []).map { J.str($0) }.filter { out[$0] != nil }
@@ -122,6 +128,10 @@ final class Library: ObservableObject {
         if let s = J.num(prefs["skipBack"]), s > 0 { skipBack = s }
         if let s = J.num(prefs["skipFwd"]), s > 0 { skipFwd = s }
         catOrder = ((prefs["catOrder"] as? [Any]) ?? []).map { J.str($0) }
+        epCap = Int(J.num(prefs["epCap"]) ?? 0)
+        let pi = (root["pi"] as? [String: Any]) ?? [:]
+        piKey = J.str(pi["key"])
+        piSecret = J.str(pi["secret"])
         savedBy = J.str(root["by"])
         savedAt = J.str(root["at"])
     }
@@ -180,9 +190,238 @@ final class Library: ObservableObject {
             episodes[show.id] = list
             feedErrors[show.id] = nil
             Feeds.store(list, for: show.id)
-            if fav.contains(show.id), let ep = latestUnheard(show) { downloads.autoStart(ep) }
+            if fav.contains(show.id) { keepDownloads(show.id) }
         } catch {
             feedErrors[show.id] = error.localizedDescription
+        }
+    }
+
+    // MARK: Downloads kept per show
+
+    /// The show's own limit, else Past episodes per show, else 3.
+    func keepCount(_ show: Show) -> Int {
+        show.dlKeep ?? (epCap > 0 ? epCap : 3)
+    }
+
+    /// Downloads a favorite's newest unplayed episodes up to its limit, and removes
+    /// older ones that were downloaded by themselves (ones you downloaded stay).
+    func keepDownloads(_ showId: String) {
+        guard let show = shows[showId], fav.contains(showId), let list = episodes[showId] else { return }
+        let n = max(0, keepCount(show))
+        for ep in list.filter({ !isPlayed($0.guid) }).prefix(n) { downloads.autoStart(ep) }
+        let have = list.filter { downloads.isDownloaded($0.guid) || downloads.progress[$0.guid] != nil }
+        for ep in have.dropFirst(n) where downloads.auto.contains(ep.guid) {
+            if downloads.progress[ep.guid] != nil { downloads.cancel(ep.guid) } else { downloads.remove(ep.guid, byUser: false) }
+        }
+    }
+
+    // MARK: Changing the list
+
+    /// Saves a change to the list in Dropbox. Each change starts from Dropbox's copy as it is right now
+    /// and changes only what you asked. Dropbox takes it only if no other device saved in between
+    /// (otherwise it starts again from the newer copy), so an older or partial list is never sent.
+    /// Shows can leave only through `removing`, with the dated note the web app uses for unfollowing.
+    @discardableResult
+    func edit(removing: Set<String> = [], _ change: (inout [String: Any]) throws -> Void) async -> Bool {
+        guard dropbox.signedIn else {
+            status = "Sign in with Dropbox in Settings first."
+            return false
+        }
+        busy = true
+        defer { busy = false }
+        for _ in 0..<4 {
+            do {
+                guard let got = try await dropbox.downloadSyncWithRev() else {
+                    throw AppError("Dropbox has no list from the web app yet.")
+                }
+                guard var root = try JSONSerialization.jsonObject(with: got.data) as? [String: Any],
+                      J.str(root["app"]) == "podcast-player",
+                      let before = root["subs"] as? [String: Any], !before.isEmpty else {
+                    throw AppError("The list on Dropbox doesn't look right, so nothing was changed.")
+                }
+                try change(&root)
+                let after = (root["subs"] as? [String: Any]) ?? [:]
+                let unf = (root["unf"] as? [String: Any]) ?? [:]
+                let lost = before.keys.filter { after[$0] == nil && !(removing.contains($0) && unf[$0] != nil) }
+                guard lost.isEmpty, after.count >= before.count - removing.count else {
+                    throw AppError("Stopped so no other shows were removed from Dropbox. Nothing was changed.")
+                }
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                root["at"] = f.string(from: Date())
+                root["by"] = "iPhone app"
+                let out = try JSONSerialization.data(withJSONObject: root)
+                try await dropbox.uploadSync(out, rev: got.rev)
+                try apply(out)
+                try? out.write(to: Library.cacheURL, options: .atomic)
+                lastRefresh = Date()
+                status = ""
+                return true
+            } catch is Dropbox.SyncConflict {
+                continue
+            } catch {
+                status = "Couldn't save to Dropbox: \(error.localizedDescription)"
+                return false
+            }
+        }
+        status = "Couldn't save to Dropbox because another device kept saving. Try again."
+        return false
+    }
+
+    private static var nowMs: Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    private static func subs(_ root: [String: Any]) -> [String: Any] { (root["subs"] as? [String: Any]) ?? [:] }
+
+    func setKeep(_ showId: String, _ n: Int?) async {
+        let ok = await edit { root in
+            var subs = Library.subs(root)
+            guard var sh = subs[showId] as? [String: Any] else { throw AppError("That show isn't in your list on Dropbox.") }
+            if let n { sh["dlKeep"] = n } else { sh.removeValue(forKey: "dlKeep") }
+            subs[showId] = sh
+            root["subs"] = subs
+        }
+        if ok { keepDownloads(showId) }
+    }
+
+    func isFollowed(_ f: FoundShow) -> Bool { followedId(f) != nil }
+
+    private func followedId(_ f: FoundShow) -> String? {
+        if shows[f.id] != nil { return f.id }
+        let feed = f.feedUrl.lowercased()
+        return shows.values.first { s in
+            (f.itunesId != nil && s.itunesId == String(f.itunesId!)) || (!feed.isEmpty && s.feedUrl.lowercased() == feed)
+        }?.id
+    }
+
+    func addShow(_ f: FoundShow, subject: String) async {
+        guard followedId(f) == nil else {
+            status = "\(f.title) is already in your list."
+            return
+        }
+        let subj = subject.trimmingCharacters(in: .whitespaces)
+        await edit { root in
+            var subs = Library.subs(root)
+            if subs[f.id] != nil { return }
+            var sh: [String: Any] = ["id": f.id, "title": f.title, "author": f.author,
+                                     "feedUrl": f.feedUrl, "art": f.art, "fT": Library.nowMs]
+            if let i = f.itunesId { sh["itunesId"] = i }
+            if let p = f.piId { sh["piId"] = p }
+            if !subj.isEmpty { sh["cats"] = [subj] }
+            subs[f.id] = sh
+            root["subs"] = subs
+        }
+    }
+
+    func removeShow(_ showId: String) async {
+        await edit(removing: [showId]) { root in
+            var subs = Library.subs(root)
+            subs.removeValue(forKey: showId)
+            root["subs"] = subs
+            root["fav"] = ((root["fav"] as? [Any]) ?? []).filter { J.str($0) != showId }
+            var unf = (root["unf"] as? [String: Any]) ?? [:]
+            unf[showId] = Library.nowMs
+            root["unf"] = unf
+        }
+    }
+
+    func setFavorite(_ showId: String, _ on: Bool) async {
+        await edit { root in
+            guard Library.subs(root)[showId] != nil else { throw AppError("That show isn't in your list on Dropbox.") }
+            var list = ((root["fav"] as? [Any]) ?? []).map { J.str($0) }
+            if on { if !list.contains(showId) { list.append(showId) } } else { list.removeAll { $0 == showId } }
+            root["fav"] = list
+        }
+    }
+
+    func setSubjects(_ showId: String, _ cats: [String]) async {
+        var clean: [String] = []
+        for c in cats.map({ $0.trimmingCharacters(in: .whitespaces) }) where !c.isEmpty && !clean.contains(c) { clean.append(c) }
+        await edit { root in
+            var subs = Library.subs(root)
+            guard var sh = subs[showId] as? [String: Any] else { throw AppError("That show isn't in your list on Dropbox.") }
+            sh.removeValue(forKey: "cat")
+            if clean.isEmpty { sh.removeValue(forKey: "cats") } else { sh["cats"] = clean }
+            subs[showId] = sh
+            root["subs"] = subs
+        }
+    }
+
+    func renameSubject(_ old: String, to new: String) async {
+        let name = new.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, name != old else { return }
+        await edit { root in
+            var subs = Library.subs(root)
+            for (id, raw) in subs {
+                guard var sh = raw as? [String: Any] else { continue }
+                var cats = ((sh["cats"] as? [Any]) ?? []).map { J.str($0) }
+                if J.str(sh["cat"]) == old { cats.append(old) }
+                guard cats.contains(old) else { continue }
+                var out: [String] = []
+                for c in cats.map({ $0 == old ? name : $0 }) where !out.contains(c) { out.append(c) }
+                sh.removeValue(forKey: "cat")
+                sh["cats"] = out
+                subs[id] = sh
+            }
+            root["subs"] = subs
+            var prefs = (root["prefs"] as? [String: Any]) ?? [:]
+            if let order = prefs["catOrder"] as? [Any] {
+                var out: [String] = []
+                for c in order.map({ J.str($0) == old ? name : J.str($0) }) where !out.contains(c) { out.append(c) }
+                prefs["catOrder"] = out
+                root["prefs"] = prefs
+            }
+        }
+    }
+
+    // MARK: Search
+
+    var hasPodcastIndex: Bool { !piKey.isEmpty && !piSecret.isEmpty }
+
+    /// Podcast Index first when the synced key is there, with Apple's directory as the backup.
+    func search(_ term: String) async throws -> [FoundShow] {
+        let q = term.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return [] }
+        if hasPodcastIndex, let found = try? await searchPodcastIndex(q), !found.isEmpty { return found }
+        return try await searchApple(q)
+    }
+
+    private func searchPodcastIndex(_ q: String) async throws -> [FoundShow] {
+        var c = URLComponents(string: "https://api.podcastindex.org/api/1.0/search/byterm")!
+        c.queryItems = [URLQueryItem(name: "q", value: q), URLQueryItem(name: "max", value: "30")]
+        let date = String(Int(Date().timeIntervalSince1970))
+        let hash = Insecure.SHA1.hash(data: Data((piKey + piSecret + date).utf8)).map { String(format: "%02x", $0) }.joined()
+        var req = URLRequest(url: c.url!)
+        req.setValue(date, forHTTPHeaderField: "X-Auth-Date")
+        req.setValue(piKey, forHTTPHeaderField: "X-Auth-Key")
+        req.setValue(hash, forHTTPHeaderField: "Authorization")
+        req.setValue("N5PREcaster/0.5 (iPhone)", forHTTPHeaderField: "User-Agent")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AppError("Podcast Index didn't answer.") }
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return ((root?["feeds"] as? [[String: Any]]) ?? []).compactMap { f in
+            guard let pid = J.num(f["id"]).map({ Int($0) }) else { return nil }
+            let it = J.num(f["itunesId"]).map { Int($0) }.flatMap { $0 > 0 ? $0 : nil }
+            let feed = J.str(f["url"]).isEmpty ? J.str(f["originalUrl"]) : J.str(f["url"])
+            let art = J.str(f["artwork"]).isEmpty ? J.str(f["image"]) : J.str(f["artwork"])
+            let author = J.str(f["author"]).isEmpty ? J.str(f["ownerName"]) : J.str(f["author"])
+            return FoundShow(id: it.map { "it:\($0)" } ?? "pi:\(pid)", itunesId: it, piId: pid,
+                             title: J.str(f["title"]), author: author, feedUrl: feed, art: art, source: "Podcast Index")
+        }
+    }
+
+    private func searchApple(_ q: String) async throws -> [FoundShow] {
+        var c = URLComponents(string: "https://itunes.apple.com/search")!
+        c.queryItems = [URLQueryItem(name: "media", value: "podcast"), URLQueryItem(name: "entity", value: "podcast"),
+                        URLQueryItem(name: "limit", value: "25"), URLQueryItem(name: "term", value: q)]
+        let (data, _) = try await URLSession.shared.data(from: c.url!)
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return ((root?["results"] as? [[String: Any]]) ?? []).compactMap { r in
+            guard let cid = J.num(r["collectionId"]).map({ Int($0) }) else { return nil }
+            let title = J.str(r["collectionName"]).isEmpty ? J.str(r["trackName"]) : J.str(r["collectionName"])
+            var art = J.str(r["artworkUrl600"]).isEmpty ? J.str(r["artworkUrl100"]) : J.str(r["artworkUrl600"])
+            art = art.replacingOccurrences(of: "100x100bb", with: "600x600bb")
+            return FoundShow(id: "it:\(cid)", itunesId: cid, piId: nil, title: title, author: J.str(r["artistName"]),
+                             feedUrl: J.str(r["feedUrl"]), art: art, source: "Apple")
         }
     }
 

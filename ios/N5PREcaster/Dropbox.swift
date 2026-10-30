@@ -2,8 +2,8 @@ import Foundation
 import CryptoKit
 import Security
 
-/// Sign in with Dropbox (PKCE, no app secret) and read the web app's sync.json.
-/// The app asks Dropbox for read-only access, so it can never change the file.
+/// Sign in with Dropbox (PKCE, no app secret), read the web app's sync.json, and save edits to it.
+/// Saving needs Dropbox's revision of the copy the edit started from, so it never replaces a newer copy.
 @MainActor
 final class Dropbox: ObservableObject {
     static let appKey = "9yk2nzxp65t5krk"
@@ -161,6 +161,69 @@ final class Dropbox: ObservableObject {
             if text.contains("missing_scope") {
                 needsWriteSignIn = true
                 throw AppError("Sign out of Dropbox and back in, in Settings, so transcripts can be saved there.")
+            }
+            if status == 401 && attempt == 0 {
+                tok = try await token(force: true)
+                continue
+            }
+            throw AppError("Dropbox answered \(status): \(text.prefix(200))")
+        }
+        throw AppError("Dropbox wouldn't accept the sign-in.")
+    }
+
+    /// Dropbox's copy of sync.json and its revision, or nil when Dropbox has none.
+    func downloadSyncWithRev() async throws -> (data: Data, rev: String)? {
+        var tok = try await token()
+        for attempt in 0..<2 {
+            var req = URLRequest(url: URL(string: "https://content.dropboxapi.com/2/files/download")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
+            req.setValue("{\"path\":\"\(Dropbox.file)\"}", forHTTPHeaderField: "Dropbox-API-Arg")
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            req.timeoutInterval = 30
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let http = resp as? HTTPURLResponse
+            let status = http?.statusCode ?? 0
+            if status == 200 {
+                let meta = (http?.value(forHTTPHeaderField: "Dropbox-API-Result")).flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+                let rev = J.str(meta["rev"])
+                guard !rev.isEmpty else { throw AppError("Dropbox didn't say which copy of your list this is.") }
+                return (data, rev)
+            }
+            let body = String(decoding: data, as: UTF8.self)
+            if status == 409 && body.contains("not_found") { return nil }
+            if status == 401 && attempt == 0 {
+                tok = try await token(force: true)
+                continue
+            }
+            throw AppError("Dropbox answered \(status): \(body.prefix(200))")
+        }
+        throw AppError("Dropbox wouldn't accept the sign-in.")
+    }
+
+    struct SyncConflict: Error {}
+
+    /// Replaces sync.json only if it is still the revision the edit started from.
+    /// When another device saved in between, this throws SyncConflict and nothing is written.
+    func uploadSync(_ data: Data, rev: String) async throws {
+        let arg = "{\"path\":\"\(Dropbox.file)\",\"mode\":{\".tag\":\"update\",\"update\":\"\(rev)\"},\"autorename\":false,\"mute\":true,\"strict_conflict\":true}"
+        var tok = try await token()
+        for attempt in 0..<2 {
+            var req = URLRequest(url: URL(string: "https://content.dropboxapi.com/2/files/upload")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
+            req.setValue(arg, forHTTPHeaderField: "Dropbox-API-Arg")
+            req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            req.timeoutInterval = 60
+            let (body, resp) = try await URLSession.shared.upload(for: req, from: data)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let text = String(decoding: body, as: UTF8.self)
+            if status == 200 { return }
+            if status == 409 && text.contains("conflict") { throw SyncConflict() }
+            if text.contains("missing_scope") {
+                needsWriteSignIn = true
+                throw AppError("Sign out of Dropbox and back in, in Settings, so changes can be saved there.")
             }
             if status == 401 && attempt == 0 {
                 tok = try await token(force: true)
