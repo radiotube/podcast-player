@@ -376,12 +376,27 @@ var AD_RE = /\b(ads?|advert(isement)?s?|sponsor(ed|s|ship)?|commercials?|promos?
 
 /* ---------- storage ---------- */
 function blank(){return {subs:{}, fav:[], pos:{}, played:{}, speed:1, now:null, cache:{}, skipBack:15, skipFwd:30, adSkip:true, pi:{key:"", secret:""}, sugg:{}, hideSugg:{}, posT:{}, nowT:0, epSort:"new", epTab:"recent", trim:false, trimMin:1, gen:{}, trimRes:{}, txRes:{}, mkSrc:{}, unf:{}, keep:{}, newest:{}, quietAt:0, autoNext:true, catView:"eps", epCap:0, skipWords:[], hiWords:[], wordAt:{}, catOrder:[], dbxBase:null, mkAuto:"", mkAutoPaused:false, mkAutoNo:{}, txHits:{}, dbxMaster:0};}
+/* This device's own settings, also kept apart from the main saved copy, which can be several megabytes. */
+var DEV_KEY = "pp.dev", DEV_FIELDS = ["pi","txMake","epTab","catView","mkAuto","mkAutoPaused","mkAutoNo","txRes","mkSrc","dbxMaster"];
+function devCopy(){ var o = {n:Object.keys(S.subs).length, at:Date.now()}; DEV_FIELDS.forEach(function(k){ if(S[k]!==undefined) o[k] = S[k]; }); return o; }
 var S = load();
 function load(){
   var s = null, raw = null;
   try{ raw = localStorage.getItem(KEY); }catch(e){}
   try{ s = JSON.parse(raw||"null"); }catch(e){ s = null; }
-  if(!s || typeof s !== "object") s = blank();
+  if(!s || typeof s !== "object"){
+    s = blank();
+    // The saved copy is gone or unreadable. This device's own settings (the Podcast Index key, Make transcripts
+    // and the like) are also kept in a small second copy, so they come back; shows and subjects come back from
+    // Dropbox on the first sync, which takes Dropbox's copy whole because this copy has no last-synced copy.
+    var dev = null; try{ dev = JSON.parse(localStorage.getItem(DEV_KEY)||"null"); }catch(e){}
+    if(dev && typeof dev === "object"){ DEV_FIELDS.forEach(function(k){ if(dev[k]!==undefined) s[k] = dev[k]; }); if(dev.n > 1) s.lostAt = Date.now(); }
+  }
+  else {
+    // A saved copy older than the small one (its last save didn't fit) still gets the key back.
+    var dv = null; try{ dv = JSON.parse(localStorage.getItem(DEV_KEY)||"null"); }catch(e){}
+    if(dv && dv.pi && dv.pi.key && !(s.pi && s.pi.key) && !(s.pi && s.pi.gone)) s.pi = dv.pi;
+  }
   // The copy last seen on Dropbox now lives inside this saved copy (dbxBase), so the two are always saved
   // together. It used to be kept apart, and when one was saved and the other wasn't (a full storage, or a
   // second open window), sync read this device's older copy as fresh changes and undid newer ones. The old,
@@ -394,6 +409,7 @@ function load(){
   if(!Array.isArray(s.skipWords)) s.skipWords = []; if(!Array.isArray(s.hiWords)) s.hiWords = [];
   if(!s.wordAt || typeof s.wordAt !== "object") s.wordAt = {};
   if(!Array.isArray(s.catOrder)) s.catOrder = [];
+  if(!s.pi || typeof s.pi!=="object") s.pi = {key:"", secret:""};
   return s;
 }
 /* A show can sit under several subjects (cats). Copies from before that kept one subject in cat,
@@ -567,7 +583,7 @@ document.addEventListener("visibilitychange", function(){ if(!document.hidden) t
 var saveT = null;
 function save(now, quiet){
   clearTimeout(saveT);
-  var go = function(){ if(!store()){ shrinkCache(1); if(!store()){ shrinkCache(2); if(!store()){ S.cache = {}; store(); } } } if(!quiet) syncCheck(); };
+  var go = function(){ if(!store()){ shrinkCache(1); if(!store()){ shrinkCache(2); if(!store()){ S.cache = {}; store(); } } } try{ localStorage.setItem(DEV_KEY, JSON.stringify(devCopy())); }catch(e){} if(!quiet) syncCheck(); };
   if(now) go(); else saveT = setTimeout(go, 300);
 }
 
@@ -1816,22 +1832,27 @@ function renderSettings(top, view){
     el("div",{class:"btn-row"},[ el("button",{class:"btn secondary", text:"Review quiet shows", onclick:function(){ go({tab:"home", quiet:true}); }}) ])
   ]));
 
-  var piStatus = el("p",{class:"status", id:"piStatus", "aria-live":"polite", text: hasPI()? "Key saved on this device." : ""});
+  var piStatus = el("p",{class:"status", id:"piStatus", "aria-live":"polite", text: hasPI()? (dbx ? "Key saved, and kept in your Dropbox for your other devices." : "Key saved on this device.") : ""});
   var keyInp = el("input",{id:"piKey", type:"text", autocomplete:"off", autocapitalize:"off", spellcheck:"false", value:S.pi.key||"", placeholder:"API key"});
   var secInp = el("input",{id:"piSecret", type:"password", autocomplete:"off", value:S.pi.secret||"", placeholder:"API secret"});
   view.appendChild(el("div",{class:"card"},[
     el("h3",{text:"Podcast Index search"}),
-    el("p",{text:"Podcast Index is searched first when you add your free key here. Sign up at api.podcastindex.org; they email you a key and a secret. Both stay on this device only."}),
+    el("p",{text:"Podcast Index is searched first when you add your free key here. Sign up at api.podcastindex.org; they email you a key and a secret. When you're signed in to Dropbox, both are kept there with your shows, so you enter them once and every signed-in device gets them. Otherwise they stay on this device."}),
     el("div",{class:"form-grid"},[ el("label",{class:"field", for:"piKey"},[ "API key", keyInp ]), el("label",{class:"field", for:"piSecret"},[ "API secret", secInp ]) ]),
     el("div",{class:"btn-row"},[
       el("button",{class:"btn", text:"Save and test", onclick:function(){
-        S.pi = {key:keyInp.value.trim(), secret:secInp.value.trim()}; save(true); S.cache = {}; wordsChanged();
-        if(!hasPI()){ piStatus.className="status"; piStatus.textContent = "Key cleared. Search uses Apple Podcasts."; return; }
+        var k = keyInp.value.trim(), sc = secInp.value.trim();
+        // Saving with an empty box doesn't wipe the key; Remove key does that on purpose.
+        if(!k || !sc){ piStatus.className="status err"; piStatus.textContent = "Fill in both the key and the secret. To take the key off, use Remove key."; return; }
+        S.pi = {key:k, secret:sc, t:Date.now()}; save(true); S.cache = {}; wordsChanged();
         piStatus.className="status"; piStatus.textContent = "Testing…";
         piSearch("amateur radio newsline").then(function(rs){ piStatus.textContent = "Works. Podcast Index found "+rs.length+" match"+(rs.length===1?"":"es")+" for a test search."; },
           function(err){ piStatus.className="status err"; piStatus.textContent = err.message==="badkey" ? "Podcast Index turned that key down. Check both values and try again." : "Couldn't reach Podcast Index just now. The key is saved; try again later."; });
       }}),
-      hasPI()? el("button",{class:"btn secondary", text:"Remove key", onclick:function(){ S.pi = {key:"",secret:""}; S.cache = {}; save(true); render(); }}) : null
+      hasPI()? el("button",{class:"btn secondary", text:"Remove key", onclick:function(){
+        if(!this.dataset.armed){ var b = this; b.dataset.armed = "1"; b.textContent = dbx ? "Tap again to remove it from all devices" : "Tap again to remove it"; setTimeout(function(){ if(b.isConnected){ delete b.dataset.armed; b.textContent = "Remove key"; } }, 8000); return; }
+        S.pi = {key:"", secret:"", t:Date.now(), gone:true}; S.cache = {}; save(true); render();
+      }}) : null
     ]),
     piStatus
   ]));
@@ -3310,7 +3331,7 @@ function makeCard(){
 /* ---------- Dropbox sync ----------
    Each person signs in with their own Dropbox. The app gets one folder of its own there
    (Apps/<app name>) and keeps a single file, sync.json, with shows, subjects, favorites order,
-   listening spots and playback settings. The Podcast Index key never leaves the device.
+   listening spots, playback settings and the Podcast Index key.
    Sign-in uses PKCE, so the App key below is public and no app secret exists. */
 var DBX_APP_KEY = "9yk2nzxp65t5krk";
 var DBX_FILE = "/sync.json";
@@ -3322,7 +3343,7 @@ function lsSet(k, v){ try{ if(v==null) localStorage.removeItem(k); else localSto
 function dbxKey(){ var o = null; try{ o = localStorage.getItem("pp.dbx.key"); }catch(e){} return DBX_APP_KEY || o || ""; }
 var dbx = lsGet(DBX_AUTH);
 var sync = {busy:null, again:false, timer:null, msg:"", err:false, at:0, sent:"", orphan:"", rev:"", by:"", byAt:""};
-var APP_VER = 45;
+var APP_VER = 46;
 /* A short name for this browser, written into sync.json so it's clear which device saved Dropbox's copy last. */
 function deviceLabel(){
   var u = navigator.userAgent||"", mobile = /iPhone|iPod/.test(u) ? "iPhone" : (/iPad/.test(u) || (/Macintosh/.test(u) && navigator.maxTouchPoints > 1)) ? "iPad" : /Android/.test(u) ? "Android" : "";
@@ -3478,7 +3499,7 @@ function dbxUpload(data, rev, keepalive){
 
 /* What travels between devices. Anything not listed here stays on the device. */
 function snap(){
-  return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0,
+  return {subs:S.subs, fav:S.fav, pos:S.pos, posT:S.posT, played:S.played, hideSugg:S.hideSugg, unf:S.unf, keep:S.keep, now:S.now, nowT:S.nowT||0, pi:S.pi,
     prefs:{speed:S.speed, skipBack:S.skipBack, skipFwd:S.skipFwd, adSkip:S.adSkip, epSort:S.epSort, trim:S.trim, trimMin:S.trimMin, autoNext:S.autoNext, epCap:S.epCap, skipWords:S.skipWords, hiWords:S.hiWords, wordAt:S.wordAt, catOrder:S.catOrder}};
 }
 function copy(o){ return o==null ? o : JSON.parse(JSON.stringify(o)); }
@@ -3511,6 +3532,15 @@ function mergeFields(b, l, r, preferLocal){
   // Time saved is a running total, so listening on two devices adds up rather than one side winning.
   if(l.trimSv || r.trimSv){ var bs = (b && b.trimSv)||0, ls = l.trimSv||0, rs = r.trimSv||0; out.trimSv = b ? Math.max(ls, rs, ls + rs - bs) : Math.max(ls, rs); }
   return out;
+}
+/* The Podcast Index key: the one saved most recently wins. An empty key only wins when someone chose
+   Remove key (gone); a device that never had one, or lost its copy, can't blank out the synced key. */
+function pickPi(a, b){
+  var ok = function(x){ return x && typeof x==="object" && ((x.key && x.secret) || x.gone); };
+  var t = function(x){ return +x.t || (x.key ? 1 : 0); };
+  var A = ok(a) ? a : null, B = ok(b) ? b : null;
+  var w = !A ? B : !B ? A : t(B) > t(A) ? B : t(A) > t(B) ? A : (A.key ? A : B);
+  return w ? copy(w) : (a && typeof a==="object" ? copy(a) : {key:"", secret:""});
 }
 /* base: the copy last seen on Dropbox (null on a device's first sync). local: this device. remote: Dropbox now.
    On a first sync Dropbox's copy wins ties, so a new device takes on the order and settings already set up. */
@@ -3580,6 +3610,7 @@ function mergeSync(base, local, remote, fresh){
   var at = {}; [B.prefs.wordAt, L.prefs.wordAt, R.prefs.wordAt].forEach(function(o){ if(o && typeof o==="object") Object.keys(o).forEach(function(w){ if(+o[w] > (at[w]||0)) at[w] = +o[w]; }); });
   if(Object.keys(at).length || L.prefs.wordAt || R.prefs.wordAt) out.prefs.wordAt = at;
 
+  out.pi = pickPi(L.pi, R.pi);
   var rn = R.nowT||0, ln = L.nowT||0;
   if(rn > ln || (!L.now && R.now)){ out.now = R.now||null; out.nowT = rn; } else { out.now = L.now||null; out.nowT = ln; }
   return out;
@@ -3593,6 +3624,7 @@ function applyMerged(m){
   var lt = cur ? (S.posT[cur.g]||0) : 0;
   var prefsBefore = stable(snap().prefs), wordsBefore = stable([S.skipWords, S.hiWords, S.wordAt]), orderBefore = stable(S.catOrder);
   S.subs = m.subs; S.fav = m.fav; S.pos = m.pos; S.posT = m.posT; S.played = m.played; S.hideSugg = m.hideSugg; S.unf = m.unf||{}; S.keep = m.keep||{};
+  if(m.pi && !same(m.pi, S.pi)){ var hadPI = hasPI(); S.pi = m.pi; if(hasPI()!==hadPI){ S.cache = {}; wordsChanged(); } }
   normAll(S.subs);
   ["speed","skipBack","skipFwd","adSkip","epSort","trim","trimMin","autoNext","epCap","skipWords","hiWords","wordAt","catOrder"].forEach(function(k){ if(m.prefs[k]!==undefined) S[k] = m.prefs[k]; });
   if(!Array.isArray(S.skipWords)) S.skipWords = []; if(!Array.isArray(S.hiWords)) S.hiWords = []; if(!S.wordAt || typeof S.wordAt!=="object") S.wordAt = {}; if(!Array.isArray(S.catOrder)) S.catOrder = [];
@@ -3731,6 +3763,7 @@ function syncNow(keepalive){
   setSync("Syncing…");
   sync.busy = runSync(0, keepalive).then(function(){
     sync.at = Date.now(); sync.sent = stable(snap()); sync.syncedKey = keyState(); sync.warned = false; setSync(syncedLabel());
+    if(S.lostAt){ delete S.lostAt; save(true, true); toast("This device's saved copy couldn't be read, so your shows came back from Dropbox"); }
   }, function(e){
     if(!dbx) return;
     if(e && e.message==="signedout") return;
@@ -3753,7 +3786,7 @@ function holdEnd(){ if(!hold.on) return; hold.on = false; clearTimeout(hold.time
 function syncSoon(ms){ if(!dbx) return; clearTimeout(sync.timer); sync.timer = setTimeout(function(){ syncNow(); }, ms); }
 /* Shows, favorites and settings sync a few seconds after a change. Listening spots ride along,
    and on their own go out every two minutes while playing, on pause, and when the app goes to the background. */
-function keyState(){ var s = snap(); return stable({subs:s.subs, fav:s.fav, played:s.played, hideSugg:s.hideSugg, unf:s.unf, keep:s.keep, prefs:s.prefs}); }
+function keyState(){ var s = snap(); return stable({subs:s.subs, fav:s.fav, played:s.played, hideSugg:s.hideSugg, unf:s.unf, keep:s.keep, prefs:s.prefs, pi:s.pi}); }
 function syncCheck(){
   if(!dbx || sync.busy) return;
   if(keyState()!==sync.syncedKey) syncSoon(3000);
@@ -3887,7 +3920,7 @@ function syncCard(){
     return card;
   }
   if(dbx){
-    card.appendChild(el("p",{text:"Signed in"+(dbx.name? " as "+dbx.name : "")+(dbx.email? " ("+dbx.email+")" : "")+". Shows, subjects, favorites order, listening spots and playback settings stay the same on every device signed in to this Dropbox. Your Podcast Index key stays on each device."}));
+    card.appendChild(el("p",{text:"Signed in"+(dbx.name? " as "+dbx.name : "")+(dbx.email? " ("+dbx.email+")" : "")+". Shows, subjects, favorites order, listening spots and playback settings stay the same on every device signed in to this Dropbox, and so does your Podcast Index key."}));
     if(!sync.msg && sync.at) status.textContent = syncedLabel();
     card.appendChild(status);
     card.appendChild(el("p",{class:"note", text:"On this device ("+deviceLabel()+", app version "+APP_VER+"): "+sumText(listSummary(snap()))+"."+(sync.by && sync.byAt ? " Dropbox's copy was last saved by "+sync.by+" "+histWhen(sync.byAt)+"." : "")}));
