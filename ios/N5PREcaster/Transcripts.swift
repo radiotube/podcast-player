@@ -103,6 +103,7 @@ final class Transcripts: ObservableObject {
     func find(_ ep: Episode) async -> TranscriptFile? {
         let k = Transcripts.key(sid: ep.showId, guid: ep.guid)
         if let f = localFile(k) { return f }
+        if let f = await published(ep, key: k) { return f }
         guard library.dropbox.signedIn else { return nil }
         if let at = checked[k], Date().timeIntervalSince(at) < 600 { return nil }
         checked[k] = Date()
@@ -110,6 +111,67 @@ final class Transcripts: ObservableObject {
               let f = try? JSONDecoder().decode(TranscriptFile.self, from: data), !f.segs.isEmpty else { return nil }
         saveLocal(k, data)
         return f
+    }
+
+    /// The transcript the show publishes in its feed (SRT, VTT or Podcasting 2.0 JSON), kept on the iPhone.
+    private func published(_ ep: Episode, key k: String) async -> TranscriptFile? {
+        guard let s = ep.transcript, let url = URL(string: s) else { return nil }
+        if let at = checked["feed." + k], Date().timeIntervalSince(at) < 600 { return nil }
+        checked["feed." + k] = Date()
+        guard let got = try? await URLSession.shared.data(from: url),
+              (got.1 as? HTTPURLResponse)?.statusCode ?? 200 < 400,
+              let text = String(data: got.0, encoding: .utf8) ?? String(data: got.0, encoding: .isoLatin1) else { return nil }
+        let segs = Transcripts.parse(text)
+        guard !segs.isEmpty else { return nil }
+        let f = TranscriptFile(v: 1, g: ep.guid, sid: ep.showId, t: ep.title, show: nil, made: nil, by: nil,
+                               dur: ep.duration > 0 ? ep.duration : nil, segs: segs, src: "feed", size: nil)
+        if let out = try? JSONEncoder().encode(f) { saveLocal(k, out) }
+        return f
+    }
+
+    /// Reads SRT, VTT or JSON captions and joins short cues into sentence-sized lines, like the web app.
+    static func parse(_ raw: String) -> [Seg] {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cues: [Seg] = []
+        if t.hasPrefix("{"), let d = t.data(using: .utf8),
+           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           let list = j["segments"] as? [[String: Any]] {
+            for c in list {
+                let b = String(describing: c["body"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if b.isEmpty { continue }
+                cues.append(Seg(s: J.num(c["startTime"]) ?? 0, e: J.num(c["endTime"]) ?? 0, b: b))
+            }
+        } else if t.contains("-->") {
+            func sec(_ s: Substring) -> Double {
+                s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+                    .split(separator: ":").reduce(0) { $0 * 60 + (Double($1) ?? 0) }
+            }
+            let blocks = t.replacingOccurrences(of: "\r", with: "").components(separatedBy: "\n\n")
+            for block in blocks {
+                let lines = block.split(separator: "\n", omittingEmptySubsequences: false)
+                guard let k = lines.firstIndex(where: { $0.contains("-->") }) else { continue }
+                let times = lines[k].components(separatedBy: "-->")
+                guard times.count == 2 else { continue }
+                let body = lines[(k + 1)...].joined(separator: " ")
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+                if body.isEmpty { continue }
+                let end = times[1].trimmingCharacters(in: .whitespaces).split(separator: " ").first ?? ""
+                cues.append(Seg(s: sec(Substring(times[0])), e: sec(end), b: body))
+            }
+        }
+        var out: [Seg] = []
+        for c in cues {
+            if var last = out.last,
+               last.b.count < 120 || (last.b.count < 280 && last.b.range(of: "[.?!][\"')\\]]?$", options: .regularExpression) == nil) {
+                last.b += " " + c.b
+                last.e = c.e
+                out[out.count - 1] = last
+            } else {
+                out.append(c)
+            }
+        }
+        return out
     }
 
     func loadCurrent(_ ep: Episode?) async {

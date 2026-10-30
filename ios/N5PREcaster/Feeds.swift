@@ -127,7 +127,11 @@ final class RSSParser: NSObject, XMLParserDelegate {
         case "itunes:image":
             if inItem { itemImage = attributeDict["href"] ?? "" }
         case "podcast:transcript":
-            if inItem && transcriptUrl.isEmpty { transcriptUrl = attributeDict["url"] ?? "" }
+            // SRT, VTT or JSON have timings; skip HTML and plain text versions.
+            let type = (attributeDict["type"] ?? "").lowercased()
+            if inItem && transcriptUrl.isEmpty && !type.contains("html") && !type.contains("plain") {
+                transcriptUrl = attributeDict["url"] ?? ""
+            }
         default:
             break
         }
