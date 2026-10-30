@@ -21,6 +21,7 @@ enum Feeds {
         if parser.items.isEmpty {
             throw AppError("No episodes found in the feed.")
         }
+        storeAbout(RSSParser.plain(parser.channelAbout), for: showId)
         return parser.items.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
 
@@ -53,6 +54,21 @@ enum Feeds {
         }
     }
 
+    private static func aboutFile(_ showId: String) -> URL {
+        cacheFile(showId).deletingLastPathComponent()
+            .appendingPathComponent("about-" + String(cacheFile(showId).lastPathComponent.dropFirst(4)))
+    }
+
+    /// The show's own description, saved when its feed was last read.
+    static func about(_ showId: String) -> String {
+        (try? String(contentsOf: aboutFile(showId), encoding: .utf8)) ?? ""
+    }
+
+    static func storeAbout(_ text: String, for showId: String) {
+        guard !text.isEmpty else { return }
+        try? text.write(to: aboutFile(showId), atomically: true, encoding: .utf8)
+    }
+
     static func chapters(_ address: String) async throws -> [Chapter] {
         guard let url = URL(string: address) else { return [] }
         let (data, _) = try await URLSession.shared.data(from: url)
@@ -76,6 +92,9 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private var chaptersUrl = ""
     private var itemImage = ""
     private var transcriptUrl = ""
+    /// The channel's description (itunes:summary when there's no description).
+    var channelAbout = ""
+    private var channelSummary = ""
 
     init(showId: String) { self.showId = showId }
 
@@ -133,6 +152,12 @@ final class RSSParser: NSObject, XMLParserDelegate {
                 let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if (fields[k] ?? "").isEmpty { fields[k] = t }
             }
+        }
+        else if k == "description" && channelAbout.isEmpty {
+            channelAbout = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if k == "itunes:summary" && channelSummary.isEmpty {
+            channelSummary = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if channelAbout.isEmpty { channelAbout = channelSummary }
         }
         text = ""
     }

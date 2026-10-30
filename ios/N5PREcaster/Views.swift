@@ -278,12 +278,15 @@ struct ShowView: View {
     @State private var tab = 0
     @State private var confirmRemove = false
     @State private var editSubjects = false
+    @State private var aboutOpen = false
 
     init(show: Show) { start = show }
 
     /// The show as it is in the list now, so changes made here show at once.
     private var show: Show { library.shows[start.id] ?? start }
     private var isFav: Bool { library.fav.contains(show.id) }
+    /// Read again whenever the episode list changes, since that's when the feed is saved.
+    private var about: String { _ = library.episodes[start.id]; return Feeds.about(start.id) }
     private var keepChoice: Binding<Int> {
         Binding(get: { show.dlKeep ?? -1 },
                 set: { v in Task { await library.setKeep(show.id, v < 0 ? nil : v) } })
@@ -298,13 +301,38 @@ struct ShowView: View {
                 HStack(alignment: .bottom, spacing: 16) {
                     ArtView(url: show.art, size: 120, radius: 14)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(show.title)
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(Theme.fg)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { aboutOpen.toggle() }
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(show.title)
+                                    .font(.system(size: 22, weight: .bold))
+                                    .foregroundStyle(Theme.fg)
+                                    .multilineTextAlignment(.leading)
+                                if !about.isEmpty {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Theme.muted)
+                                        .rotationEffect(.degrees(aboutOpen ? 90 : 0))
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint(aboutOpen ? "Hides the show's description" : "Shows the show's description")
                         if !show.author.isEmpty {
                             Text(show.author).font(.system(size: 14)).foregroundStyle(Theme.muted)
                         }
                     }
+                }
+
+                if !about.isEmpty {
+                    Text(about)
+                        .font(.system(size: 14))
+                        .foregroundStyle(aboutOpen ? Theme.fg : Theme.muted)
+                        .lineLimit(aboutOpen ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: aboutOpen)
+                        .textSelection(.enabled)
+                        .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { aboutOpen.toggle() } }
                 }
 
                 if !library.status.isEmpty {
@@ -1141,7 +1169,7 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    LabeledContent("Version", value: "0.6")
+                    LabeledContent("Version", value: "0.7")
                 }
                 .listRowBackground(Theme.surface)
             }

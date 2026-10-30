@@ -34,6 +34,7 @@ struct N5PREcasterApp: App {
         .onChange(of: phase) { _, newPhase in
             if newPhase == .background {
                 player.savePosition()
+                Task { await library.sendProgress() }
                 N5PREcasterApp.scheduleRefresh()
             }
             if newPhase == .active {

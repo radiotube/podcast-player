@@ -229,7 +229,10 @@ final class Player: ObservableObject {
     private func setPlaying(_ p: Bool) {
         guard p != isPlaying else { return }
         isPlaying = p
-        if !p { savePosition() }
+        if !p {
+            savePosition()
+            library.sendProgressSoon()
+        }
         updateNowPlaying()
     }
 

@@ -17,9 +17,15 @@ final class Library: ObservableObject {
     @Published var loading: Set<String> = []
     @Published private var localPos: [String: Double] = [:]
     @Published private var localPlayed: [String: Double] = [:]
+    /// When each listening spot here was saved (ms), to compare with the web app's posT.
+    private var localPosT: [String: Double] = [:]
+    /// Episodes whose spot or played mark changed here and haven't reached Dropbox yet.
+    private var unsent: Set<String> = []
+    private var sendTask: Task<Void, Never>?
 
     var remotePos: [String: Double] = [:]
     var remotePlayed: [String: Double] = [:]
+    var remotePosT: [String: Double] = [:]
     var speed: Double = 1
     var skipBack: Double = 15
     var skipFwd: Double = 30
@@ -39,6 +45,8 @@ final class Library: ObservableObject {
         let d = UserDefaults.standard
         localPos = d.dictionary(forKey: "pos") as? [String: Double] ?? [:]
         localPlayed = d.dictionary(forKey: "played") as? [String: Double] ?? [:]
+        localPosT = d.dictionary(forKey: "posT") as? [String: Double] ?? [:]
+        unsent = Set(d.stringArray(forKey: "unsent") ?? [])
         if let data = try? Data(contentsOf: Library.cacheURL) { try? apply(data) }
     }
 
@@ -75,6 +83,7 @@ final class Library: ObservableObject {
 
     /// The list from Dropbox, then fresh episode lists for Favorites (which starts their downloads).
     func refreshAll(force: Bool = false) async {
+        await sendProgress()
         await refresh(force: force)
         await refreshFavorites(force: force)
     }
@@ -122,6 +131,9 @@ final class Library: ObservableObject {
             if let b = v as? Bool { played[k] = b ? 1 : 0 } else if let n = J.num(v) { played[k] = n }
         }
         remotePlayed = played
+        var posT: [String: Double] = [:]
+        for (k, v) in (root["posT"] as? [String: Any]) ?? [:] { if let n = J.num(v) { posT[k] = n } }
+        remotePosT = posT
 
         let prefs = (root["prefs"] as? [String: Any]) ?? [:]
         if let s = J.num(prefs["speed"]), s > 0 { speed = s }
@@ -222,13 +234,13 @@ final class Library: ObservableObject {
     /// (otherwise it starts again from the newer copy), so an older or partial list is never sent.
     /// Shows can leave only through `removing`, with the dated note the web app uses for unfollowing.
     @discardableResult
-    func edit(removing: Set<String> = [], _ change: (inout [String: Any]) throws -> Void) async -> Bool {
+    func edit(removing: Set<String> = [], quiet: Bool = false, _ change: (inout [String: Any]) throws -> Void) async -> Bool {
         guard dropbox.signedIn else {
-            status = "Sign in with Dropbox in Settings first."
+            if !quiet { status = "Sign in with Dropbox in Settings first." }
             return false
         }
-        busy = true
-        defer { busy = false }
+        if !quiet { busy = true }
+        defer { if !quiet { busy = false } }
         for _ in 0..<4 {
             do {
                 guard let got = try await dropbox.downloadSyncWithRev() else {
@@ -260,11 +272,11 @@ final class Library: ObservableObject {
             } catch is Dropbox.SyncConflict {
                 continue
             } catch {
-                status = "Couldn't save to Dropbox: \(error.localizedDescription)"
+                if !quiet { status = "Couldn't save to Dropbox: \(error.localizedDescription)" }
                 return false
             }
         }
-        status = "Couldn't save to Dropbox because another device kept saving. Try again."
+        if !quiet { status = "Couldn't save to Dropbox because another device kept saving. Try again." }
         return false
     }
 
@@ -425,30 +437,85 @@ final class Library: ObservableObject {
         }
     }
 
-    // MARK: Listening spots and played marks (kept on this iPhone for now)
+    // MARK: Listening spots and played marks, shared with the web app through Dropbox
+    // Same rules as the web app's sync: the newer listening spot wins (posT), and for played
+    // marks the latest choice wins (a time in ms, negative when marked not played).
 
     func position(_ guid: String) -> Double {
-        if let p = localPos[guid] { return p }
+        if let p = localPos[guid], (localPosT[guid] ?? 0) >= (remotePosT[guid] ?? 0) { return p }
         if isPlayed(guid) { return 0 }
-        return remotePos[guid] ?? 0
+        return remotePos[guid] ?? localPos[guid] ?? 0
     }
 
     func savePosition(_ guid: String, _ t: Double) {
         localPos[guid] = t.rounded()
+        localPosT[guid] = Library.nowMsD
         UserDefaults.standard.set(localPos, forKey: "pos")
+        UserDefaults.standard.set(localPosT, forKey: "posT")
+        markUnsent(guid)
     }
 
     func isPlayed(_ guid: String) -> Bool {
-        if let v = localPlayed[guid] { return v > 0 }
-        return (remotePlayed[guid] ?? 0) > 0
+        let l = localPlayed[guid] ?? 0, r = remotePlayed[guid] ?? 0
+        return (abs(l) >= abs(r) ? l : r) > 0
     }
 
     func setPlayed(_ guid: String, _ on: Bool) {
-        let now = Date().timeIntervalSince1970 * 1000
+        let now = Library.nowMsD
         localPlayed[guid] = on ? now : -now
         localPos[guid] = 0
+        localPosT[guid] = now
         UserDefaults.standard.set(localPlayed, forKey: "played")
         UserDefaults.standard.set(localPos, forKey: "pos")
+        UserDefaults.standard.set(localPosT, forKey: "posT")
         if on { downloads.listened(guid) }
+        markUnsent(guid)
+        sendProgressSoon(delay: 3)
+    }
+
+    private static var nowMsD: Double { (Date().timeIntervalSince1970 * 1000).rounded() }
+
+    private func markUnsent(_ guid: String) {
+        if unsent.insert(guid).inserted { UserDefaults.standard.set(Array(unsent), forKey: "unsent") }
+    }
+
+    /// Sends progress a little later, so a burst of changes goes in one save.
+    func sendProgressSoon(delay: Double = 20) {
+        sendTask?.cancel()
+        sendTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if Task.isCancelled { return }
+            await sendProgress()
+        }
+    }
+
+    /// Puts this iPhone's listening spots and played marks into Dropbox's list, where newer.
+    /// Only the episodes changed here are touched; everything else in the file stays as it is.
+    func sendProgress() async {
+        guard !unsent.isEmpty, dropbox.signedIn else { return }
+        let guids = unsent
+        let lp = localPos, lt = localPosT, lpl = localPlayed
+        let ok = await edit(quiet: true) { root in
+            var pos = (root["pos"] as? [String: Any]) ?? [:]
+            var posT = (root["posT"] as? [String: Any]) ?? [:]
+            var played = (root["played"] as? [String: Any]) ?? [:]
+            for g in guids {
+                if let mine = lpl[g] {
+                    let theirs: Double = (played[g] as? Bool) == true ? 1 : (J.num(played[g]) ?? 0)
+                    if abs(mine) > abs(theirs) { played[g] = Int64(mine) }
+                }
+                if let spot = lp[g], let t = lt[g], t > (J.num(posT[g]) ?? 0) {
+                    pos[g] = spot
+                    posT[g] = Int64(t)
+                }
+            }
+            root["pos"] = pos
+            root["posT"] = posT
+            root["played"] = played
+        }
+        if ok {
+            unsent.subtract(guids)
+            UserDefaults.standard.set(Array(unsent), forKey: "unsent")
+        }
     }
 }
