@@ -46,6 +46,14 @@ final class Library: ObservableObject {
     /// The web app's "Past episodes per show" (0 = all) and episode order ("new" or "old").
     @Published var epCap = 0
     @Published var epSort = "new"
+    /// Shows whose transcripts this iPhone makes ahead (kept on this device, like the web app's Make them ahead).
+    @Published var txShows: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "tx.shows") ?? []) {
+        didSet { UserDefaults.standard.set(Array(txShows), forKey: "tx.shows") }
+    }
+    /// Quiet shows you chose to keep (web "keep": show id → when, in ms).
+    @Published var keepQuiet: [String: Double] = [:]
+    /// Shows checked so far while looking for quiet ones (0 when not checking).
+    @Published var quietChecked = 0
     /// The episode in the player, which lists always keep.
     var playingGuid = ""
     private var piKey = ""
@@ -108,7 +116,8 @@ final class Library: ObservableObject {
     func refreshFavorites(force: Bool = false) async {
         if !force && Date().timeIntervalSince(lastFavCheck) < 15 * 60 { return }
         lastFavCheck = Date()
-        for show in favShows { await loadEpisodes(show, force: true) }
+        let tx = allShows.filter { txShows.contains($0.id) && !fav.contains($0.id) }
+        for show in favShows + tx { await loadEpisodes(show, force: true) }
     }
 
     func apply(_ data: Data) throws {
@@ -137,6 +146,7 @@ final class Library: ObservableObject {
         }
         shows = out
         fav = ((root["fav"] as? [Any]) ?? []).map { J.str($0) }.filter { out[$0] != nil }
+        keepQuiet = ((root["keep"] as? [String: Any]) ?? [:]).compactMapValues { J.num($0) }
 
         var pos: [String: Double] = [:]
         for (k, v) in (root["pos"] as? [String: Any]) ?? [:] where !k.hasSuffix("#len") {
@@ -251,7 +261,7 @@ final class Library: ObservableObject {
             episodes[show.id] = list
             feedErrors[show.id] = nil
             Feeds.store(list, for: show.id)
-            if fav.contains(show.id) { keepDownloads(show.id) }
+            if fav.contains(show.id) || txShows.contains(show.id) { keepDownloads(show.id) }
         } catch {
             feedErrors[show.id] = error.localizedDescription
         }
@@ -266,10 +276,16 @@ final class Library: ObservableObject {
 
     /// Downloads a favorite's newest unplayed episodes up to its limit, and removes
     /// older ones that were downloaded by themselves (ones you downloaded stay).
+    /// Shows that make transcripts ahead also download (on Wi-Fi) the newest unplayed episodes that
+    /// don't come with the show's own transcript.
     func keepDownloads(_ showId: String) {
-        guard let show = shows[showId], fav.contains(showId), let list = episodes[showId] else { return }
+        let tx = txShows.contains(showId)
+        guard let show = shows[showId], fav.contains(showId) || tx, let list = episodes[showId] else { return }
         let n = max(0, keepCount(show))
-        for ep in list.filter({ !isPlayed($0.guid) }).prefix(n) { downloads.autoStart(ep) }
+        for ep in list.filter({ !isPlayed($0.guid) }).prefix(n) {
+            if fav.contains(showId) { downloads.autoStart(ep) }
+            if tx && (ep.transcript ?? "").isEmpty && !ep.isVideo { downloads.autoStart(ep, forTranscript: true) }
+        }
         let have = list.filter { downloads.isDownloaded($0.guid) || downloads.progress[$0.guid] != nil }
         for ep in have.dropFirst(n) where downloads.auto.contains(ep.guid) {
             if downloads.progress[ep.guid] != nil { downloads.cancel(ep.guid) } else { downloads.remove(ep.guid, byUser: false) }
@@ -551,8 +567,23 @@ final class Library: ObservableObject {
     }
 
     private func searchPodcastIndex(_ q: String) async throws -> [FoundShow] {
-        var c = URLComponents(string: "https://api.podcastindex.org/api/1.0/search/byterm")!
-        c.queryItems = [URLQueryItem(name: "q", value: q), URLQueryItem(name: "max", value: "30")]
+        let root = try await piGet("search/byterm", ["q": q, "max": "30"])
+        return ((root["feeds"] as? [[String: Any]]) ?? []).compactMap(Library.found)
+    }
+
+    private static func found(_ f: [String: Any]) -> FoundShow? {
+        guard let pid = J.num(f["id"]).map({ Int($0) }) else { return nil }
+        let it = J.num(f["itunesId"]).map { Int($0) }.flatMap { $0 > 0 ? $0 : nil }
+        let feed = J.str(f["url"]).isEmpty ? J.str(f["originalUrl"]) : J.str(f["url"])
+        let art = J.str(f["artwork"]).isEmpty ? J.str(f["image"]) : J.str(f["artwork"])
+        let author = J.str(f["author"]).isEmpty ? J.str(f["ownerName"]) : J.str(f["author"])
+        return FoundShow(id: it.map { "it:\($0)" } ?? "pi:\(pid)", itunesId: it, piId: pid,
+                         title: J.str(f["title"]), author: author, feedUrl: feed, art: art, source: "Podcast Index")
+    }
+
+    private func piGet(_ path: String, _ query: [String: String]) async throws -> [String: Any] {
+        var c = URLComponents(string: "https://api.podcastindex.org/api/1.0/" + path)!
+        c.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         let date = String(Int(Date().timeIntervalSince1970))
         let hash = Insecure.SHA1.hash(data: Data((piKey + piSecret + date).utf8)).map { String(format: "%02x", $0) }.joined()
         var req = URLRequest(url: c.url!)
@@ -562,16 +593,94 @@ final class Library: ObservableObject {
         req.setValue("N5PREcaster/0.5 (iPhone)", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AppError("Podcast Index didn't answer.") }
-        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        return ((root?["feeds"] as? [[String: Any]]) ?? []).compactMap { f in
-            guard let pid = J.num(f["id"]).map({ Int($0) }) else { return nil }
-            let it = J.num(f["itunesId"]).map { Int($0) }.flatMap { $0 > 0 ? $0 : nil }
-            let feed = J.str(f["url"]).isEmpty ? J.str(f["originalUrl"]) : J.str(f["url"])
-            let art = J.str(f["artwork"]).isEmpty ? J.str(f["image"]) : J.str(f["artwork"])
-            let author = J.str(f["author"]).isEmpty ? J.str(f["ownerName"]) : J.str(f["author"])
-            return FoundShow(id: it.map { "it:\($0)" } ?? "pi:\(pid)", itunesId: it, piId: pid,
-                             title: J.str(f["title"]), author: author, feedUrl: feed, art: art, source: "Podcast Index")
+        return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
+    // MARK: Quiet shows
+
+    /// The newest episode date known for a show.
+    func lastEpisode(_ id: String) -> Date? { episodes[id]?.compactMap(\.date).max() }
+
+    /// Shows with no new episode in a year that you haven't chosen to keep since then, quietest first.
+    var quietShows: [Show] {
+        let year = Date().addingTimeInterval(-365 * 86400)
+        return allShows.filter { s in
+            guard let d = lastEpisode(s.id), d < year else { return false }
+            return !((keepQuiet[s.id] ?? 0) > d.timeIntervalSince1970 * 1000)
+        }.sorted { (lastEpisode($0.id) ?? .distantPast) < (lastEpisode($1.id) ?? .distantPast) }
+    }
+
+    /// Loads episode lists for shows not loaded yet, so quiet ones can be found.
+    func checkAllShows() async {
+        let todo = allShows.filter { episodes[$0.id] == nil }
+        quietChecked = 0
+        for show in todo {
+            await loadEpisodes(show)
+            quietChecked += 1
         }
+        quietChecked = 0
+    }
+
+    /// Keeps a quiet show, like the web app's Keep (asked again only if it stays quiet after a new episode).
+    func keepQuietShow(_ id: String) async {
+        await edit { root in
+            var keep = (root["keep"] as? [String: Any]) ?? [:]
+            keep[id] = Library.nowMs
+            root["keep"] = keep
+        }
+    }
+
+    // MARK: OPML
+
+    static func normUrl(_ u: String) -> String {
+        var s = u.trimmingCharacters(in: .whitespaces).lowercased()
+        for p in ["https://", "http://", "www."] where s.hasPrefix(p) { s.removeFirst(p.count) }
+        while s.hasSuffix("/") { s.removeLast() }
+        return s
+    }
+
+    /// Adds the shows in another app's OPML export that aren't in your list yet, in one save.
+    /// Shows found in Podcast Index get their artwork and ids, others are added by their feed.
+    func importOPML(_ data: Data) async {
+        let feeds = OPMLReader.feeds(data)
+        guard !feeds.isEmpty else {
+            status = "That file has no podcast feeds in it. Export OPML from your podcast app again."
+            return
+        }
+        var have = Set(shows.values.map { Library.normUrl($0.feedUrl) })
+        var add: [[String: Any]] = []
+        var done = 0
+        for f in feeds {
+            done += 1
+            status = "Matching \(done) of \(feeds.count) shows…"
+            let key = Library.normUrl(f.url)
+            if key.isEmpty || have.contains(key) { continue }
+            have.insert(key)
+            var sh: [String: Any] = ["id": "rss:" + f.url, "title": f.title.isEmpty ? f.url : f.title, "author": "",
+                                     "feedUrl": f.url, "art": "", "fT": Library.nowMs]
+            if hasPodcastIndex, let r = try? await piGet("podcasts/byfeedurl", ["url": f.url]),
+               let feed = r["feed"] as? [String: Any], let m = Library.found(feed) {
+                if shows[m.id] != nil { continue }
+                sh = ["id": m.id, "title": m.title.isEmpty ? f.title : m.title, "author": m.author,
+                      "feedUrl": f.url, "art": m.art, "fT": Library.nowMs]
+                if let i = m.itunesId { sh["itunesId"] = i }
+                if let p = m.piId { sh["piId"] = p }
+            }
+            add.append(sh)
+        }
+        guard !add.isEmpty else {
+            status = "All \(feeds.count) shows in that file are already in your list."
+            return
+        }
+        let ok = await edit { root in
+            var subs = Library.subs(root)
+            let there = Set(subs.values.compactMap { ($0 as? [String: Any]).map { Library.normUrl(J.str($0["feedUrl"])) } })
+            for sh in add where subs[J.str(sh["id"])] == nil && !there.contains(Library.normUrl(J.str(sh["feedUrl"]))) {
+                subs[J.str(sh["id"])] = sh
+            }
+            root["subs"] = subs
+        }
+        if ok { status = "Added \(add.count) new show\(add.count == 1 ? "" : "s") from \(feeds.count) in the file. Star favorites and give them subjects on their pages." }
     }
 
     private func searchApple(_ q: String) async throws -> [FoundShow] {

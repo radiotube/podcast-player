@@ -49,9 +49,8 @@ struct TranscriptFile: Codable {
 /// on-device speech recognition, and shares them with the web app through Dropbox.
 @MainActor
 final class Transcripts: ObservableObject {
-    @Published var auto: Bool {
-        didSet { UserDefaults.standard.set(auto, forKey: "tx.auto") }
-    }
+    /// Episodes with a transcript saved on this iPhone, by key.
+    @Published private(set) var have: Set<String> = []
     @Published private(set) var working: String?
     @Published private(set) var failed: [String: String] = [:]
     /// Why a show's own transcript couldn't be loaded, by episode.
@@ -70,7 +69,8 @@ final class Transcripts: ObservableObject {
 
     init(library: Library) {
         self.library = library
-        auto = UserDefaults.standard.object(forKey: "tx.auto") as? Bool ?? true
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: Transcripts.folder.path)) ?? []
+        have = Set(names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) })
         pending = Set(UserDefaults.standard.stringArray(forKey: "tx.pending") ?? [])
         library.downloads.onFinished = { [weak self] _ in self?.scan() }
     }
@@ -97,6 +97,17 @@ final class Transcripts: ObservableObject {
 
     private func saveLocal(_ key: String, _ data: Data) {
         try? data.write(to: Transcripts.folder.appendingPathComponent("\(key).json"), options: .atomic)
+        have.insert(key)
+    }
+
+    /// True when a transcript is on this iPhone or the show publishes one.
+    func has(_ ep: Episode) -> Bool {
+        have.contains(Transcripts.key(sid: ep.showId, guid: ep.guid)) || !(ep.transcript ?? "").isEmpty
+    }
+
+    /// For a show that makes transcripts ahead: no transcript yet, still to hear.
+    func coming(_ ep: Episode) -> Bool {
+        library.txShows.contains(ep.showId) && !has(ep) && !library.isPlayed(ep.guid) && !ep.isVideo
     }
 
     func isQueued(_ guid: String) -> Bool { queue.contains { $0.guid == guid } }
@@ -237,12 +248,13 @@ final class Transcripts: ObservableObject {
         runQueue()
     }
 
-    /// Queues every downloaded episode with no transcript, and sends finished ones to Dropbox.
+    /// For shows set to make transcripts ahead: queues downloaded, unplayed episodes with no transcript,
+    /// starts downloads for the rest, and sends finished transcripts to Dropbox.
     func scan() {
         flushPending()
-        guard auto else { return }
-        for list in library.episodes.values {
-            for ep in list where library.downloads.isDownloaded(ep.guid) && (ep.transcript ?? "").isEmpty {
+        for id in library.txShows { library.keepDownloads(id) }
+        for (id, list) in library.episodes where library.txShows.contains(id) {
+            for ep in list where library.downloads.isDownloaded(ep.guid) && (ep.transcript ?? "").isEmpty && !library.isPlayed(ep.guid) {
                 if failed[ep.guid] != nil || working == ep.guid || isQueued(ep.guid) { continue }
                 if localData(Transcripts.key(sid: ep.showId, guid: ep.guid)) != nil { continue }
                 queue.append(ep)

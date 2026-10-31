@@ -108,8 +108,8 @@ final class Downloads: ObservableObject {
     }
 
     /// Called for a favorite's newest unplayed episode after its list loads.
-    func autoStart(_ ep: Episode) {
-        guard autoFavorites, onWifi, !skipped.contains(ep.guid), failed[ep.guid] == nil else { return }
+    func autoStart(_ ep: Episode, forTranscript: Bool = false) {
+        guard autoFavorites || forTranscript, onWifi, !skipped.contains(ep.guid), failed[ep.guid] == nil else { return }
         if let d = ep.date, Date().timeIntervalSince(d) > 30 * 86400 { return }
         start(ep, byItself: true)
     }

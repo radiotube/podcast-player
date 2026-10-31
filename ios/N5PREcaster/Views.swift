@@ -1,6 +1,7 @@
 import SwiftUI
 import AuthenticationServices
 import AVKit
+import UniformTypeIdentifiers
 
 // MARK: Home
 
@@ -55,6 +56,25 @@ struct ContentView: View {
                                     .foregroundStyle(Theme.accent)
                             }
                         }
+                    }
+
+                    let quiet = filter.isEmpty ? library.quietShows.count : 0
+                    if quiet > 0 {
+                        NavigationLink { QuietView() } label: {
+                            HStack {
+                                Image(systemName: "moon.zzz")
+                                Text("\(quiet) show\(quiet == 1 ? " hasn't" : "s haven't") had an episode in a year. Review")
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+                            }
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.fg)
+                            .padding(12)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
                     }
 
                     if !filter.isEmpty {
@@ -328,6 +348,7 @@ func skipSymbol(_ seconds: Double, forward: Bool) -> String {
 struct ShowView: View {
     let start: Show
     @EnvironmentObject var library: Library
+    @EnvironmentObject var transcripts: Transcripts
     @Environment(\.dismiss) private var dismiss
     @State private var tab = 0
     @State private var confirmRemove = false
@@ -458,6 +479,13 @@ struct ShowView: View {
                             Label("Downloads to keep: \(library.keepCount(show))", systemImage: "arrow.down.circle")
                         }
                         .pickerStyle(.menu)
+                        Toggle(isOn: Binding(get: { library.txShows.contains(show.id) },
+                                             set: { on in
+                                                 if on { library.txShows.insert(show.id) } else { library.txShows.remove(show.id) }
+                                                 transcripts.scan()
+                                             })) {
+                            Label("Make transcripts ahead", systemImage: "text.quote")
+                        }
                         Button { editSubjects = true } label: { Label("Subjects", systemImage: "tag") }
                         Divider()
                         Button(role: .destructive) { confirmRemove = true } label: { Label("Remove show", systemImage: "trash") }
@@ -703,6 +731,7 @@ struct EpisodeRow: View {
     @EnvironmentObject var library: Library
     @EnvironmentObject var player: Player
     @EnvironmentObject var downloads: Downloads
+    @EnvironmentObject var transcripts: Transcripts
     @State private var open = false
 
     var body: some View {
@@ -793,6 +822,13 @@ struct EpisodeRow: View {
             parts.append(clock(ep.duration))
         }
         if downloads.isDownloaded(ep.guid) { parts.append("Downloaded") }
+        if transcripts.working == ep.guid {
+            parts.append("Making transcript")
+        } else if transcripts.coming(ep) {
+            parts.append("Transcript coming")
+        } else if transcripts.has(ep) {
+            parts.append("Transcript")
+        }
         if current { parts.append(player.isPlaying ? "Playing" : "Paused") }
         return parts.joined(separator: " · ")
     }
@@ -1035,14 +1071,16 @@ struct PlayerView: View {
                         }
                     }
 
+                    let hasTx = transcripts.has(n.episode) || transcripts.currentGuid == n.episode.guid && transcripts.current != nil
                     Button { showTranscript = true } label: {
-                        Label("Transcript", systemImage: "text.quote")
+                        Label(transcripts.coming(n.episode) ? "Transcript coming" : "Transcript", systemImage: "text.quote")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.fg)
+                            .foregroundStyle(hasTx ? Theme.accentInk : Theme.muted)
                             .padding(.horizontal, 14)
                             .frame(minHeight: 40)
-                            .background(Capsule().fill(Theme.surface2))
+                            .background(Capsule().fill(hasTx ? Theme.accent : Theme.surface2))
                     }
+                    .accessibilityHint(hasTx ? "This episode has a transcript" : "No transcript yet")
                     .buttonStyle(.plain)
 
                     if !player.errorText.isEmpty {
@@ -1076,6 +1114,7 @@ struct TranscriptView: View {
     @EnvironmentObject var downloads: Downloads
     @EnvironmentObject var transcripts: Transcripts
     @Environment(\.dismiss) private var dismiss
+    @State private var followAfter = Date.distantPast
 
     var body: some View {
         NavigationStack {
@@ -1104,28 +1143,67 @@ struct TranscriptView: View {
         .task(id: player.now?.episode.guid) { await transcripts.loadCurrent(player.now?.episode) }
     }
 
+    /// Follows the speech: the words being spoken stay in the middle of the screen. Within a line, the spot
+    /// is estimated from the time, since lines carry only their start and end. Scrolling by hand pauses
+    /// following for a few seconds.
     private func lines(_ f: TranscriptFile) -> some View {
-        let at = f.segs.lastIndex { $0.s <= player.time + 0.3 }
+        let t = player.time
+        let at = f.segs.lastIndex { $0.s <= t + 0.3 }
+        let frac: Double = at.map { i in
+            let s = f.segs[i]
+            return s.e > s.s ? min(1, max(0, (t - s.s) / (s.e - s.s))) : 0
+        } ?? 0
+        let step = (at ?? -1) * 40 + Int(frac * 39)
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(f.segs.enumerated()), id: \.offset) { i, seg in
-                        Text(seg.b)
-                            .font(.system(size: 18, weight: i == at ? Font.Weight.semibold : Font.Weight.regular))
-                            .foregroundStyle(i == at ? Theme.fg : Theme.muted)
+                        lineText(seg.b, current: i == at, frac: frac)
+                            .font(.system(size: 19))
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .overlay(alignment: .top) {
+                                if i == at {
+                                    GeometryReader { g in
+                                        VStack(spacing: 0) {
+                                            Color.clear.frame(height: max(0, g.size.height * frac))
+                                            Color.clear.frame(height: 1).id("now")
+                                            Spacer(minLength: 0)
+                                        }
+                                    }
+                                }
+                            }
                             .contentShape(Rectangle())
-                            .onTapGesture { player.seek(seg.s) }
+                            .onTapGesture { player.seek(seg.s); followAfter = .distantPast }
                             .id(i)
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 300)
             }
+            .simultaneousGesture(DragGesture().onChanged { _ in followAfter = Date().addingTimeInterval(6) })
             .onAppear { if let at { proxy.scrollTo(at, anchor: .center) } }
             .onChange(of: at) { _, new in
-                if let new { withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(new, anchor: .center) } }
+                guard Date() > followAfter, let new else { return }
+                proxy.scrollTo(new, anchor: .center)
+            }
+            .onChange(of: step) { _, _ in
+                guard Date() > followAfter else { return }
+                withAnimation(.easeInOut(duration: 0.5)) { proxy.scrollTo("now", anchor: .center) }
             }
         }
+    }
+
+    /// The line being spoken: words already said in full color, the next few bold, the rest dim.
+    private func lineText(_ b: String, current: Bool, frac: Double) -> Text {
+        guard current else { return Text(b).foregroundStyle(Theme.muted) }
+        let n = b.count
+        var cut = b.index(b.startIndex, offsetBy: min(n, Int(Double(n) * frac)))
+        while cut > b.startIndex && cut < b.endIndex && b[b.index(before: cut)] != " " { cut = b.index(before: cut) }
+        var end = b.index(cut, offsetBy: min(b.distance(from: cut, to: b.endIndex), 28))
+        while end < b.endIndex && b[end] != " " { end = b.index(after: end) }
+        return Text(b[..<cut]).foregroundStyle(Theme.fg)
+            + Text(b[cut..<end]).fontWeight(.bold).foregroundStyle(Theme.accent)
+            + Text(b[end...]).foregroundStyle(Theme.fg.opacity(0.85))
     }
 
     @ViewBuilder
@@ -1233,6 +1311,7 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
     @State private var message = ""
+    @State private var importing = false
     @State private var codeMode = false
     @State private var code = ""
     @State private var working = false
@@ -1316,7 +1395,10 @@ struct SettingsView: View {
                     if !library.status.isEmpty {
                         Text(library.status).font(.footnote).foregroundStyle(Theme.muted)
                     }
+                    NavigationLink("Quiet shows") { QuietView() }
                     if dropbox.signedIn {
+                        Button("Import OPML from another app") { importing = true }
+                            .disabled(library.busy)
                         Button("Use this iPhone's list everywhere") { Task { await askMaster() } }
                             .disabled(library.busy)
                     }
@@ -1334,6 +1416,13 @@ struct SettingsView: View {
                     }
                 } message: {
                     Text(masterSummary)
+                }
+                .fileImporter(isPresented: $importing, allowedContentTypes: [.xml, UTType(filenameExtension: "opml") ?? .xml, .data]) { result in
+                    guard case .success(let url) = result else { return }
+                    let open = url.startAccessingSecurityScopedResource()
+                    let data = try? Data(contentsOf: url)
+                    if open { url.stopAccessingSecurityScopedResource() }
+                    if let data { Task { await library.importOPML(data) } }
                 }
 
                 Section {
@@ -1366,14 +1455,14 @@ struct SettingsView: View {
                 .listRowBackground(Theme.surface)
 
                 Section {
-                    Toggle("Make transcripts for downloads", isOn: $transcripts.auto)
+                    LabeledContent("Made ahead for", value: library.txShows.isEmpty ? "No shows" : "\(library.txShows.count) show\(library.txShows.count == 1 ? "" : "s")")
                     if !transcripts.note.isEmpty {
                         Text(transcripts.note).font(.footnote).foregroundStyle(Theme.muted)
                     }
                 } header: {
                     Text("Transcripts")
                 } footer: {
-                    Text("Made on this iPhone with Apple's speech recognition (iOS 26), free and with nothing sent to the cloud, then saved to Dropbox so the web app has them too.")
+                    Text("Turn on Make transcripts ahead in a show's ••• menu. Its new episodes download on Wi-Fi and get transcripts on this iPhone, and show Transcript coming until then. Other shows get one when you tap Make a transcript. Made with Apple's speech recognition (iOS 26), free and with nothing sent to the cloud, then saved to Dropbox for the web app. Shows that publish their own transcript need nothing made.")
                 }
                 .listRowBackground(Theme.surface)
 
@@ -1401,7 +1490,7 @@ struct SettingsView: View {
                 .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "1.0")
+                    LabeledContent("Version", value: "1.1")
                 }
                 .listRowBackground(Theme.surface)
             }
@@ -1442,6 +1531,64 @@ struct SettingsView: View {
             await library.refresh()
         } catch {
             message = "That code didn't work (\(error.localizedDescription)). Tap Sign in with a code instead to get a fresh one."
+        }
+    }
+}
+
+// MARK: Quiet shows
+
+/// Shows with no new episode in a year. Each one waits for you: keep it, or unfollow it after you confirm.
+struct QuietView: View {
+    @EnvironmentObject var library: Library
+    @State private var unfollow: Show?
+
+    var body: some View {
+        List {
+            Section {
+                if library.quietChecked > 0 {
+                    HStack {
+                        ProgressView()
+                        Text("Checked \(library.quietChecked) of \(library.allShows.filter { library.episodes[$0.id] == nil }.count + library.quietChecked) shows…")
+                    }
+                } else if library.allShows.contains(where: { library.episodes[$0.id] == nil }) {
+                    Button("Check every show") { Task { await library.checkAllShows() } }
+                }
+                if library.quietShows.isEmpty && library.quietChecked == 0 {
+                    Text("No quiet shows found.").foregroundStyle(Theme.muted)
+                }
+                ForEach(library.quietShows) { show in
+                    HStack(spacing: 12) {
+                        ArtView(url: show.art, size: 44, radius: 8)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(show.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
+                            if let d = library.lastEpisode(show.id) {
+                                Text("Last episode \(d.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Button("Keep") { Task { await library.keepQuietShow(show.id) } }
+                            .buttonStyle(.bordered)
+                        Button("Unfollow", role: .destructive) { unfollow = show }
+                            .buttonStyle(.bordered)
+                    }
+                    .disabled(library.busy)
+                }
+            } footer: {
+                Text("Shows with no new episode in a year. Keep asks again only if a show goes quiet after a new episode. Unfollow removes the show from your list on every device, the same as on the web app.")
+            }
+            .listRowBackground(Theme.surface)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.bg)
+        .navigationTitle("Quiet shows")
+        .confirmationDialog("Unfollow \(unfollow?.title ?? "")?", isPresented: Binding(get: { unfollow != nil }, set: { if !$0 { unfollow = nil } }),
+                            titleVisibility: .visible) {
+            Button("Unfollow", role: .destructive) {
+                if let s = unfollow { Task { await library.removeShow(s.id) } }
+                unfollow = nil
+            }
+            Button("Cancel", role: .cancel) { unfollow = nil }
         }
     }
 }
