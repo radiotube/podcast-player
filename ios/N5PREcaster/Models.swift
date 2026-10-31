@@ -72,6 +72,7 @@ enum J {
         if let n = v as? NSNumber { return n.stringValue }
         return ""
     }
+    static func strs(_ v: Any?) -> [String] { ((v as? [Any]) ?? []).map { str($0) }.filter { !$0.isEmpty } }
     static func num(_ v: Any?) -> Double? {
         if let n = v as? NSNumber { return n.doubleValue }
         if let s = v as? String { return Double(s) }

@@ -56,7 +56,7 @@ final class Library: ObservableObject {
     @Published var quietChecked = 0
     /// The episode in the player, which lists always keep.
     var playingGuid = ""
-    private var piKey = ""
+    private(set) var piKey = ""
     private var piSecret = ""
     private var lastRefresh = Date.distantPast
     private var lastFavCheck = Date.distantPast
@@ -181,6 +181,198 @@ final class Library: ObservableObject {
         remoteNow = root["now"] as? [String: Any]
         remoteNowT = J.num(root["nowT"]) ?? 0
         lastRoot = root
+        hideSugg = Set(((root["hideSugg"] as? [String: Any]) ?? [:]).keys)
+        let words = (J.strs(prefs["skipWords"]), J.strs(prefs["hiWords"]))
+        wordAt = ((prefs["wordAt"] as? [String: Any]) ?? [:]).compactMapValues { J.num($0) }
+        if words.0 != skipWords || words.1 != hiWords {
+            (skipWords, hiWords) = words
+            hits = [:]
+            for (id, list) in episodes { indexWords(list, for: id) }
+        }
+    }
+
+    // MARK: Words (the web app's skip and highlight word lists)
+
+    struct WordHit { var h = ""; var s = ""; var sAt: Double = 0 }
+    @Published private(set) var skipWords: [String] = []
+    @Published private(set) var hiWords: [String] = []
+    private var wordAt: [String: Double] = [:]
+    private var hits: [String: WordHit] = [:]
+    private var wordRxs: [String: NSRegularExpression] = [:]
+    /// Words from before their dates were kept count from when skip words first shipped (web app).
+    private static let wordsShipped: Double = 1792980000000
+
+    static func wordKey(_ p: String) -> String {
+        p.replacingOccurrences(of: "[\u{2018}\u{2019}\u{02BC}]", with: "'", options: .regularExpression)
+            .replacingOccurrences(of: "[\u{201C}\u{201D}]", with: "\"", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    /// Whole words in any capitals; a plain plural or possessive counts too.
+    private func matches(_ k: String, _ text: String) -> Bool {
+        if wordRxs[k] == nil {
+            var body = NSRegularExpression.escapedPattern(for: k).replacingOccurrences(of: " ", with: "\\s+")
+            if k.last.map({ $0.isLetter || $0.isNumber }) == true { body += "(?:'s|s|es)?" }
+            wordRxs[k] = try? NSRegularExpression(pattern: "(^|[^\\p{L}\\p{N}_])" + body + "(?=$|[^\\p{L}\\p{N}_])",
+                                                  options: [.caseInsensitive])
+        }
+        guard let rx = wordRxs[k] else { return text.contains(k) }
+        return rx.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    private func indexWords(_ list: [Episode], for id: String) {
+        guard !skipWords.isEmpty || !hiWords.isEmpty else { return }
+        for ep in list {
+            let text = Library.wordKey(ep.title + " " + ep.summary)
+            var r = WordHit()
+            r.h = hiWords.first { let k = Library.wordKey($0); return !k.isEmpty && matches(k, text) } ?? ""
+            if r.h.isEmpty {
+                for w in skipWords {
+                    let k = Library.wordKey(w)
+                    guard !k.isEmpty, matches(k, text) else { continue }
+                    if r.s.isEmpty { r.s = w }
+                    r.sAt = max(r.sAt, wordAt[k] ?? Library.wordsShipped)
+                }
+            }
+            if r.h.isEmpty && r.s.isEmpty { hits[ep.guid] = nil } else { hits[ep.guid] = r }
+        }
+    }
+
+    private func setEpisodes(_ list: [Episode], for id: String) {
+        episodes[id] = list
+        indexWords(list, for: id)
+    }
+
+    /// The skip word that counts this episode as played right now, or "". Never the one in the player,
+    /// one you're partway through, or one marked not played after the word was added.
+    func skipBy(_ guid: String) -> String {
+        guard !skipWords.isEmpty, let r = hits[guid], !r.s.isEmpty, guid != playingGuid, position(guid) <= 5 else { return "" }
+        let v = latestPlayed(guid)
+        if v < 0 && -v >= r.sAt { return "" }
+        return r.s
+    }
+
+    /// Played only because of a skip word.
+    func skipWhy(_ guid: String) -> String { markedPlayed(guid) ? "" : skipBy(guid) }
+
+    func hiWord(_ guid: String) -> String { hiWords.isEmpty ? "" : (hits[guid]?.h ?? "") }
+
+    /// Changes a word list in Dropbox, noting when each new word was added.
+    func setWords(skip: [String]? = nil, hi: [String]? = nil) async {
+        await edit { root in
+            var prefs = (root["prefs"] as? [String: Any]) ?? [:]
+            var at = (prefs["wordAt"] as? [String: Any]) ?? [:]
+            for w in (skip ?? []) + (hi ?? []) where at[Library.wordKey(w)] == nil { at[Library.wordKey(w)] = Library.nowMs }
+            if let skip { prefs["skipWords"] = skip }
+            if let hi { prefs["hiWords"] = hi }
+            prefs["wordAt"] = at
+            root["prefs"] = prefs
+        }
+    }
+
+    // MARK: Suggested shows
+
+    @Published private(set) var hideSugg: Set<String> = []
+
+    /// New shows for a subject from Podcast Index (then Apple), leaving out shows you follow or turned down.
+    func suggestions(for subject: String) async throws -> [FoundShow] {
+        let titles = Set(shows.values.map { $0.title.lowercased().trimmingCharacters(in: .whitespaces) })
+        return try await search(subject).filter { f in
+            !hideSugg.contains(f.id) && followedId(f) == nil
+                && !titles.contains(f.title.lowercased().trimmingCharacters(in: .whitespaces))
+        }
+    }
+
+    func hideSuggestion(_ id: String) async {
+        await edit { root in
+            var h = (root["hideSugg"] as? [String: Any]) ?? [:]
+            h[id] = 1
+            root["hideSugg"] = h
+        }
+    }
+
+    // MARK: Podcast Index key (synced through Dropbox, like the web app)
+
+    /// Checks the key with Podcast Index, then saves it. An empty key removes it everywhere.
+    func setPodcastIndexKey(_ key: String, _ secret: String) async -> String {
+        let k = key.trimmingCharacters(in: .whitespaces), s = secret.trimmingCharacters(in: .whitespaces)
+        if !k.isEmpty {
+            let old = (piKey, piSecret)
+            (piKey, piSecret) = (k, s)
+            let ok = (try? await piGet("search/byterm", ["q": "news", "max": "1"])) != nil
+            if !ok {
+                (piKey, piSecret) = old
+                return "Podcast Index turned down that key and secret. Check them and try again."
+            }
+        }
+        let ok = await edit { root in
+            root["pi"] = k.isEmpty ? ["key": "", "secret": "", "t": Library.nowMs, "gone": true] as [String: Any]
+                                   : ["key": k, "secret": s, "t": Library.nowMs] as [String: Any]
+        }
+        return ok ? (k.isEmpty ? "Key removed on all your devices." : "Key saved. Your other devices get it the next time they sync.") : ""
+    }
+
+    // MARK: Backup and earlier copies
+
+    /// A backup file in the web app's format, made from Dropbox's copy of your list.
+    func backupData() -> Data? {
+        let r = lastRoot, p = (r["prefs"] as? [String: Any]) ?? [:]
+        guard !r.isEmpty else { return nil }
+        var d: [String: Any] = ["app": "podcast-player", "v": 1, "at": ISO8601DateFormatter().string(from: Date())]
+        for k in ["subs", "fav", "pos", "played"] { d[k] = r[k] ?? [:] }
+        for k in ["speed", "skipBack", "skipFwd", "adSkip", "skipWords", "hiWords", "wordAt", "catOrder"] { if let v = p[k] { d[k] = v } }
+        return try? JSONSerialization.data(withJSONObject: d)
+    }
+
+    /// Puts back a backup file or an earlier copy, the web app's way: its shows join what's there now,
+    /// its favorites order and settings win, and listening spots and played marks keep whichever is newer.
+    /// Nothing in today's list is removed.
+    func putBack(_ data: Data) async -> Bool {
+        guard let old = try? JSONSerialization.jsonObject(with: data) as? [String: Any], J.str(old["app"]) == "podcast-player" else {
+            status = "That isn't a podcast player backup or list."
+            return false
+        }
+        let ok = await edit { root in
+            var subs = Library.subs(root), unf = (root["unf"] as? [String: Any]) ?? [:]
+            for (id, v) in Library.subs(old) {
+                guard var o = v as? [String: Any] else { continue }
+                if var cur = subs[id] as? [String: Any] {
+                    if ((cur["cats"] as? [Any]) ?? []).isEmpty, let c = o["cats"] { cur["cats"] = c; subs[id] = cur }
+                } else {
+                    o["fT"] = Library.nowMs
+                    subs[id] = o
+                    unf[id] = nil
+                }
+            }
+            root["subs"] = subs
+            root["unf"] = unf
+            let favOld = ((old["fav"] as? [Any]) ?? []).map { J.str($0) }.filter { subs[$0] != nil }
+            let favNow = ((root["fav"] as? [Any]) ?? []).map { J.str($0) }
+            root["fav"] = favOld + favNow.filter { !favOld.contains($0) }
+            var prefs = (root["prefs"] as? [String: Any]) ?? [:]
+            let oldPrefs = (old["prefs"] as? [String: Any]) ?? old
+            for k in ["speed", "skipBack", "skipFwd", "adSkip", "epSort", "trim", "trimMin", "autoNext", "epCap",
+                      "skipWords", "hiWords", "wordAt", "catOrder"] { if let v = oldPrefs[k] { prefs[k] = v } }
+            root["prefs"] = prefs
+            // Played marks: the later mark wins. Spots: the newer one wins (a backup file has no times, so it only fills gaps).
+            var played = (root["played"] as? [String: Any]) ?? [:]
+            for (g, v) in (old["played"] as? [String: Any]) ?? [:] {
+                let o = (v as? Bool) == true ? 1 : (J.num(v) ?? 0), n = (played[g] as? Bool) == true ? 1 : (J.num(played[g]) ?? 0)
+                if abs(o) > abs(n) { played[g] = v }
+            }
+            root["played"] = played
+            var pos = (root["pos"] as? [String: Any]) ?? [:], posT = (root["posT"] as? [String: Any]) ?? [:]
+            let oldT = (old["posT"] as? [String: Any]) ?? [:]
+            for (g, v) in (old["pos"] as? [String: Any]) ?? [:] where (J.num(oldT[g]) ?? 0) > (J.num(posT[g]) ?? 0) || pos[g] == nil {
+                pos[g] = v
+                if let t = oldT[g] { posT[g] = t }
+            }
+            root["pos"] = pos
+            root["posT"] = posT
+        }
+        if ok { status = "Put back. Your shows, subjects and settings are back." }
+        return ok
     }
 
     // MARK: Lists
@@ -247,7 +439,7 @@ final class Library: ObservableObject {
     func loadEpisodes(_ show: Show, force: Bool = false) async {
         if !force, let list = episodes[show.id], !list.isEmpty { return }
         if loading.contains(show.id) { return }
-        if episodes[show.id] == nil, let cached = Feeds.cached(show.id) { episodes[show.id] = cached }
+        if episodes[show.id] == nil, let cached = Feeds.cached(show.id) { setEpisodes(cached, for: show.id) }
         loading.insert(show.id)
         defer { loading.remove(show.id) }
         do {
@@ -258,7 +450,7 @@ final class Library: ObservableObject {
                 shows[show.id]?.feedUrl = feed
             }
             let list = try await Feeds.fetch(feed, showId: show.id)
-            episodes[show.id] = list
+            setEpisodes(list, for: show.id)
             feedErrors[show.id] = nil
             Feeds.store(list, for: show.id)
             if fav.contains(show.id) || txShows.contains(show.id) { keepDownloads(show.id) }
@@ -705,7 +897,7 @@ final class Library: ObservableObject {
 
     func position(_ guid: String) -> Double {
         if let p = localPos[guid], (localPosT[guid] ?? 0) >= (remotePosT[guid] ?? 0) { return p }
-        if isPlayed(guid) { return 0 }
+        if markedPlayed(guid) { return 0 }
         return remotePos[guid] ?? localPos[guid] ?? 0
     }
 
@@ -717,9 +909,15 @@ final class Library: ObservableObject {
         markUnsent(guid)
     }
 
-    func isPlayed(_ guid: String) -> Bool {
+    /// Played: marked played, or counted as played by a skip word.
+    func isPlayed(_ guid: String) -> Bool { markedPlayed(guid) || !skipBy(guid).isEmpty }
+
+    func markedPlayed(_ guid: String) -> Bool { latestPlayed(guid) > 0 }
+
+    /// The newer of this iPhone's and Dropbox's mark: positive played, negative not played, 0 none.
+    func latestPlayed(_ guid: String) -> Double {
         let l = localPlayed[guid] ?? 0, r = remotePlayed[guid] ?? 0
-        return (abs(l) >= abs(r) ? l : r) > 0
+        return abs(l) >= abs(r) ? l : r
     }
 
     func setPlayed(_ guid: String, _ on: Bool) {

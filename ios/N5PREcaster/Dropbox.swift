@@ -234,6 +234,39 @@ final class Dropbox: ObservableObject {
         throw AppError("Dropbox wouldn't accept the sign-in.")
     }
 
+    /// Earlier saved versions of sync.json, newest first (Dropbox keeps them about 30 days).
+    func syncRevisions() async throws -> [(rev: String, at: Date, size: Int)] {
+        var tok = try await token()
+        for attempt in 0..<2 {
+            var req = URLRequest(url: URL(string: "https://api.dropboxapi.com/2/files/list_revisions")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = Data("{\"path\":\"\(Dropbox.file)\",\"mode\":\"path\",\"limit\":100}".utf8)
+            req.timeoutInterval = 30
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 200 {
+                let j = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+                let iso = ISO8601DateFormatter()
+                return ((j["entries"] as? [[String: Any]]) ?? []).compactMap { e in
+                    guard let at = iso.date(from: J.str(e["server_modified"])) else { return nil }
+                    return (J.str(e["rev"]), at, Int(J.num(e["size"]) ?? 0))
+                }
+            }
+            let body = String(decoding: data, as: UTF8.self)
+            if status == 401 && attempt == 0 {
+                tok = try await token(force: true)
+                continue
+            }
+            if body.contains("scope") {
+                throw AppError("Dropbox won't let the app list earlier copies. On dropbox.com, open Apps, then N5PREcaster, and use Version history on sync.json.")
+            }
+            throw AppError("Dropbox answered \(status): \(body.prefix(200))")
+        }
+        throw AppError("Dropbox wouldn't accept the sign-in.")
+    }
+
     /// A file from the app's Dropbox folder, or nil when it isn't there.
     func downloadFile(_ path: String) async throws -> Data? {
         var tok = try await token()

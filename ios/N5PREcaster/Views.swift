@@ -120,6 +120,13 @@ struct ContentView: View {
                                 }
                             }
                         }
+                        NavigationLink { SuggestView(subject: filter) } label: {
+                            Label("Find new shows for \(filter)", systemImage: "sparkles")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                        }
                     }
 
                     let favs = filter.isEmpty ? library.favShows : []
@@ -768,6 +775,10 @@ struct EpisodeRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint(open ? "Hides the description" : "Shows the full description")
+                let hi = library.hiWord(ep.guid)
+                if !hi.isEmpty {
+                    Text("★ \(hi)").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
                 if !ep.summary.isEmpty {
                     Text(ep.summary)
                         .font(.system(size: 14))
@@ -837,7 +848,10 @@ struct EpisodeRow: View {
         var parts: [String] = []
         if let d = ep.date { parts.append(d.formatted(date: .abbreviated, time: .omitted)) }
         let pos = library.position(ep.guid)
-        if played {
+        let skip = played ? library.skipWhy(ep.guid) : ""
+        if !skip.isEmpty {
+            parts.append("Skipped: \(skip)")
+        } else if played {
             parts.append("Played")
         } else if pos > 5 && ep.duration > 0 {
             parts.append("\(clock(max(0, ep.duration - pos))) left")
@@ -1337,6 +1351,21 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var message = ""
     @State private var importing = false
+    @State private var importKind = ImportKind.opml
+    @State private var backupURL: URL?
+    @State private var restoreData: Data?
+    @State private var piKeyIn = ""
+    @State private var piSecretIn = ""
+    @State private var piNote = ""
+    @State private var confirmKeyRemove = false
+    enum ImportKind { case opml, backup }
+
+    private func makeBackup() -> URL? {
+        guard let data = library.backupData() else { return nil }
+        let day = Date().formatted(.iso8601.year().month().day())
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("podcast-player-backup-\(day).json")
+        return (try? data.write(to: url, options: .atomic)) != nil ? url : nil
+    }
     @State private var codeMode = false
     @State private var code = ""
     @State private var working = false
@@ -1422,7 +1451,15 @@ struct SettingsView: View {
                     }
                     NavigationLink("Quiet shows") { QuietView() }
                     if dropbox.signedIn {
-                        Button("Import OPML from another app") { importing = true }
+                        Button("Import OPML from another app") { importKind = .opml; importing = true }
+                            .disabled(library.busy)
+                        NavigationLink("Skip and highlight words") { WordsView() }
+                        NavigationLink("Earlier copies on Dropbox") { EarlierView() }
+                        Button("Save a backup file") { backupURL = makeBackup() }
+                        if let backupURL {
+                            ShareLink("Share or save the backup", item: backupURL)
+                        }
+                        Button("Restore from a backup file") { importKind = .backup; importing = true }
                             .disabled(library.busy)
                         Button("Use this iPhone's list everywhere") { Task { await askMaster() } }
                             .disabled(library.busy)
@@ -1442,12 +1479,51 @@ struct SettingsView: View {
                 } message: {
                     Text(masterSummary)
                 }
-                .fileImporter(isPresented: $importing, allowedContentTypes: [.xml, UTType(filenameExtension: "opml") ?? .xml, .data]) { result in
+                .fileImporter(isPresented: $importing, allowedContentTypes: importKind == .opml
+                              ? [.xml, UTType(filenameExtension: "opml") ?? .xml, .data] : [.json, .data]) { result in
                     guard case .success(let url) = result else { return }
                     let open = url.startAccessingSecurityScopedResource()
                     let data = try? Data(contentsOf: url)
                     if open { url.stopAccessingSecurityScopedResource() }
-                    if let data { Task { await library.importOPML(data) } }
+                    guard let data else { return }
+                    if importKind == .opml { Task { await library.importOPML(data) } } else { restoreData = data }
+                }
+                .confirmationDialog("Put this backup back?", isPresented: Binding(get: { restoreData != nil }, set: { if !$0 { restoreData = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Put it back") {
+                        if let d = restoreData { Task { _ = await library.putBack(d) } }
+                        restoreData = nil
+                    }
+                    Button("Cancel", role: .cancel) { restoreData = nil }
+                } message: {
+                    Text("Its shows join your list, and its favorites order and settings replace today's. Nothing in today's list is removed. Listening spots and played marks keep whichever is newer.")
+                }
+
+                Section {
+                    if library.hasPodcastIndex {
+                        LabeledContent("Key", value: String(library.piKey.prefix(4)) + "••••")
+                        Button("Remove the key", role: .destructive) { confirmKeyRemove = true }
+                    } else {
+                        TextField("API key", text: $piKeyIn).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("API secret", text: $piSecretIn)
+                        Button("Check and save") {
+                            Task {
+                                piNote = await library.setPodcastIndexKey(piKeyIn, piSecretIn)
+                                if library.hasPodcastIndex { piKeyIn = ""; piSecretIn = "" }
+                            }
+                        }
+                        .disabled(piKeyIn.isEmpty || piSecretIn.isEmpty || library.busy)
+                    }
+                    if !piNote.isEmpty { Text(piNote).font(.footnote).foregroundStyle(Theme.muted) }
+                } header: {
+                    Text("Podcast Index")
+                } footer: {
+                    Text("A free key from api.podcastindex.org finds more shows than Apple's directory. It's shared with your other devices through your Dropbox.")
+                }
+                .listRowBackground(Theme.surface)
+                .disabled(!dropbox.signedIn)
+                .confirmationDialog("Remove the Podcast Index key from all your devices?", isPresented: $confirmKeyRemove, titleVisibility: .visible) {
+                    Button("Remove", role: .destructive) { Task { piNote = await library.setPodcastIndexKey("", "") } }
                 }
 
                 Section {
@@ -1515,7 +1591,7 @@ struct SettingsView: View {
                 .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "1.1.1")
+                    LabeledContent("Version", value: "1.2")
                 }
                 .listRowBackground(Theme.surface)
             }
@@ -1614,6 +1690,185 @@ struct QuietView: View {
                 unfollow = nil
             }
             Button("Cancel", role: .cancel) { unfollow = nil }
+        }
+    }
+}
+
+// MARK: Suggested shows
+
+/// New shows for a subject. Follow adds one under the subject; the x hides it for good, on every device.
+struct SuggestView: View {
+    let subject: String
+    @EnvironmentObject var library: Library
+    @State private var found: [FoundShow]?
+    @State private var err = ""
+    @State private var gone: Set<String> = []
+
+    var body: some View {
+        List {
+            Section {
+                if let found {
+                    let list = found.filter { !gone.contains($0.id) }
+                    if list.isEmpty { Text("No new shows found for \u{201C}\(subject)\u{201D}. A broader subject name usually finds more.").foregroundStyle(Theme.muted) }
+                    ForEach(list) { f in
+                        HStack(spacing: 12) {
+                            ArtView(url: f.art, size: 48, radius: 8)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(f.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
+                                Text(f.author).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            Button("Follow") {
+                                gone.insert(f.id)
+                                Task { await library.addShow(f, subject: subject) }
+                            }
+                            .buttonStyle(.bordered)
+                            Button { gone.insert(f.id); Task { await library.hideSuggestion(f.id) } } label: { Image(systemName: "xmark") }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Not interested in \(f.title)")
+                        }
+                        .disabled(library.busy)
+                    }
+                } else if !err.isEmpty {
+                    Text(err).foregroundStyle(Theme.muted)
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
+            } footer: {
+                Text("Shows matching \u{201C}\(subject)\u{201D} that you don't follow, from \(library.hasPodcastIndex ? "Podcast Index, then Apple" : "Apple Podcasts"). Follow adds a show under this subject.")
+            }
+            .listRowBackground(Theme.surface)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.bg)
+        .navigationTitle("New for \(subject)")
+        .task {
+            do { found = try await library.suggestions(for: subject) } catch {
+                err = "Couldn't reach the podcast directory. Pull down to try again."
+            }
+        }
+        .refreshable {
+            err = ""
+            found = try? await library.suggestions(for: subject)
+        }
+    }
+}
+
+// MARK: Words
+
+/// The web app's skip and highlight word lists, shared through Dropbox.
+struct WordsView: View {
+    @EnvironmentObject var library: Library
+    @State private var newSkip = ""
+    @State private var newHi = ""
+
+    var body: some View {
+        List {
+            section("Skip episodes that mention", words: library.skipWords, entry: $newSkip,
+                    note: "A match counts as played, so it leaves New to me, subject lists and what plays next, and shows as Skipped with the word. Mark as not played or Hear again brings it back. An episode you're partway through, or the one playing, is never skipped. Plurals count too.") { list in
+                await library.setWords(skip: list)
+            }
+            section("Highlight episodes that mention", words: library.hiWords, entry: $newHi,
+                    note: "A match shows the word with a star under the title. A highlight beats a skip.") { list in
+                await library.setWords(hi: list)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.bg)
+        .navigationTitle("Words")
+        .disabled(library.busy)
+    }
+
+    private func section(_ title: String, words: [String], entry: Binding<String>, note: String,
+                         save: @escaping ([String]) async -> Void) -> some View {
+        Section {
+            ForEach(words, id: \.self) { w in Text(w) }
+                .onDelete { idx in
+                    var list = words
+                    list.remove(atOffsets: idx)
+                    Task { await save(list) }
+                }
+            HStack {
+                TextField("Add a word or phrase", text: entry)
+                    .textInputAutocapitalization(.never)
+                    .onSubmit { add(words, entry, save) }
+                Button("Add") { add(words, entry, save) }
+                    .disabled(entry.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        } header: {
+            Text(title)
+        } footer: {
+            Text(note)
+        }
+        .listRowBackground(Theme.surface)
+    }
+
+    private func add(_ words: [String], _ entry: Binding<String>, _ save: @escaping ([String]) async -> Void) {
+        let w = entry.wrappedValue.trimmingCharacters(in: .whitespaces)
+        guard !w.isEmpty, !words.contains(where: { Library.wordKey($0) == Library.wordKey(w) }) else { return }
+        entry.wrappedValue = ""
+        Task { await save(words + [w]) }
+    }
+}
+
+// MARK: Earlier copies
+
+/// Versions of your list that Dropbox kept. Putting one back adds to today's list; it never removes anything.
+struct EarlierView: View {
+    @EnvironmentObject var library: Library
+    @State private var revs: [(rev: String, at: Date, size: Int)]?
+    @State private var err = ""
+    @State private var pick: (rev: String, at: Date, size: Int)?
+    @State private var done = ""
+
+    var body: some View {
+        List {
+            Section {
+                if let revs {
+                    ForEach(revs, id: \.rev) { r in
+                        Button {
+                            pick = r
+                        } label: {
+                            HStack {
+                                Text(r.at.formatted(date: .abbreviated, time: .shortened))
+                                Spacer()
+                                Text(ByteCountFormatter.string(fromByteCount: Int64(r.size), countStyle: .file)).foregroundStyle(Theme.muted)
+                            }
+                        }
+                    }
+                } else if !err.isEmpty {
+                    Text(err).foregroundStyle(Theme.muted)
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
+                if !done.isEmpty { Text(done).font(.footnote).foregroundStyle(Theme.accent) }
+            } footer: {
+                Text("Dropbox keeps each saved copy of your list for about 30 days. Putting one back adds its shows to today's list, and its favorites order and settings replace today's. Listening spots and played marks keep whichever is newer. Nothing is removed.")
+            }
+            .listRowBackground(Theme.surface)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.bg)
+        .navigationTitle("Earlier copies")
+        .disabled(library.busy)
+        .task {
+            do { revs = try await library.dropbox.syncRevisions() } catch { err = error.localizedDescription }
+        }
+        .confirmationDialog("Put back the copy from \(pick?.at.formatted(date: .abbreviated, time: .shortened) ?? "")?",
+                            isPresented: Binding(get: { pick != nil }, set: { if !$0 { pick = nil } }), titleVisibility: .visible) {
+            Button("Put it back") {
+                guard let r = pick else { return }
+                pick = nil
+                Task {
+                    do {
+                        guard let data = try await library.dropbox.downloadFile("rev:" + r.rev) else { throw AppError("Dropbox no longer has that copy.") }
+                        done = await library.putBack(data) ? "Put back the copy from \(r.at.formatted(date: .abbreviated, time: .shortened))." : library.status
+                    } catch {
+                        done = "Couldn't put that copy back: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pick = nil }
         }
     }
 }
