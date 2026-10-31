@@ -89,6 +89,7 @@ final class RSSParser: NSObject, XMLParserDelegate {
     private var text = ""
     private var fields: [String: String] = [:]
     private var enclosure = ""
+    private var enclosureType = ""
     private var chaptersUrl = ""
     private var itemImage = ""
     private var transcriptUrl = ""
@@ -121,7 +122,10 @@ final class RSSParser: NSObject, XMLParserDelegate {
             itemImage = ""
             transcriptUrl = ""
         case "enclosure":
-            if inItem && enclosure.isEmpty { enclosure = attributeDict["url"] ?? "" }
+            if inItem && enclosure.isEmpty {
+                enclosure = attributeDict["url"] ?? ""
+                enclosureType = attributeDict["type"] ?? ""
+            }
         case "podcast:chapters":
             if inItem { chaptersUrl = attributeDict["url"] ?? "" }
         case "itunes:image":
@@ -179,7 +183,8 @@ final class RSSParser: NSObject, XMLParserDelegate {
                              summary: RSSParser.plain(desc),
                              image: itemImage,
                              chaptersUrl: chaptersUrl,
-                             transcript: transcriptUrl.isEmpty ? nil : transcriptUrl))
+                             transcript: transcriptUrl.isEmpty ? nil : transcriptUrl,
+                             mediaType: enclosureType.isEmpty ? nil : enclosureType))
     }
 
     static func parseDuration(_ s: String) -> Double {

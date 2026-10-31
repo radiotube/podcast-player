@@ -22,6 +22,8 @@ final class Player: ObservableObject {
     @Published var errorText = ""
 
     private let player = AVPlayer()
+    /// For showing a video episode's picture.
+    var avPlayer: AVPlayer { player }
     private let library: Library
     private var timeObserver: Any?
     private var statusObs: NSKeyValueObservation?

@@ -36,6 +36,14 @@ struct Episode: Identifiable, Hashable, Codable {
     let image: String
     let chaptersUrl: String
     let transcript: String?
+    /// The enclosure's type, like audio/mpeg or video/mp4.
+    var mediaType: String? = nil
+
+    /// Same test as the web app: a video type, or a video file name.
+    var isVideo: Bool {
+        if let t = mediaType, t.range(of: "video|mpegurl", options: [.regularExpression, .caseInsensitive]) != nil { return true }
+        return audioUrl.range(of: "\\.(mp4|m4v|mov|webm|m3u8)(\\?|#|$)", options: [.regularExpression, .caseInsensitive]) != nil
+    }
 }
 
 struct SubjectItem: Identifiable {

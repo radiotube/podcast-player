@@ -1,5 +1,6 @@
 import SwiftUI
 import AuthenticationServices
+import AVKit
 
 // MARK: Home
 
@@ -346,7 +347,10 @@ struct ShowView: View {
     }
 
     private var episodes: [Episode] { library.episodes[show.id] ?? [] }
-    private var shown: [Episode] { tab == 0 ? episodes.filter { !library.isPlayed($0.guid) } : episodes }
+    @State private var showAll = false
+    private var listed: [Episode] { showAll ? episodes : library.capped(episodes) }
+    private var hidden: Int { episodes.count - library.capped(episodes).count }
+    private var shown: [Episode] { library.sorted(tab == 0 ? listed.filter { !library.isPlayed($0.guid) } : listed) }
 
     var body: some View {
         ScrollView {
@@ -400,6 +404,18 @@ struct ShowView: View {
                 if episodes.isEmpty && library.loading.contains(show.id) {
                     ProgressView().frame(maxWidth: .infinity)
                 }
+                if !episodes.isEmpty {
+                    HStack {
+                        Text(hidden > 0 && !showAll ? "Newest \(library.epCap). Your limit is in Settings." : "\(episodes.count) episodes")
+                            .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        Spacer()
+                        Button(library.epSort == "old" ? "Oldest first ⇅" : "Newest first ⇅") {
+                            Task { await library.setPref("epSort", library.epSort == "old" ? "new" : "old") }
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .disabled(library.busy)
+                    }
+                }
                 if tab == 0 && shown.isEmpty && !episodes.isEmpty {
                     Text("Nothing new. Recent lists every episode.")
                         .font(.system(size: 14)).foregroundStyle(Theme.muted)
@@ -410,6 +426,11 @@ struct ShowView: View {
                         EpisodeRow(ep: ep, show: show)
                         Rectangle().fill(Theme.line).frame(height: 1)
                     }
+                }
+                if hidden > 0 {
+                    Button(showAll ? "Show only the newest \(library.epCap) again" : "Show \(hidden) older episode\(hidden == 1 ? "" : "s")") { showAll.toggle() }
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
                 }
             }
             .padding(.horizontal, 16)
@@ -727,6 +748,16 @@ struct EpisodeRow: View {
                 }
             }
             Spacer(minLength: 0)
+            if played && subject == nil {
+                // Back on the list to hear again, from the start, like the web app.
+                Button("Hear again") { library.setPlayed(ep.guid, false) }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.fg)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 30)
+                    .background(Capsule().fill(Theme.surface2))
+                    .buttonStyle(.plain)
+            }
             DownloadButton(ep: ep)
             Button {
                 if current { player.toggle() } else { player.play(ep, show: show, subject: subject) }
@@ -894,17 +925,24 @@ struct PlayerView: View {
                         Spacer()
                     }
 
-                    Group {
-                        if let img = player.artwork {
-                            Image(uiImage: img).resizable().scaledToFill()
-                        } else {
-                            Theme.surface2
+                    if n.episode.isVideo {
+                        VideoPlayer(player: player.avPlayer)
+                            .aspectRatio(16 / 9, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(.vertical, 12)
+                    } else {
+                        Group {
+                            if let img = player.artwork {
+                                Image(uiImage: img).resizable().scaledToFill()
+                            } else {
+                                Theme.surface2
+                            }
                         }
+                        .frame(width: 300, height: 300)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
+                        .padding(.vertical, 12)
                     }
-                    .frame(width: 300, height: 300)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
-                    .padding(.vertical, 12)
 
                     VStack(spacing: 2) {
                         if let ch = player.currentChapter, !ch.title.isEmpty {
@@ -1299,6 +1337,22 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Past episodes per show", selection: prefBinding(library.epCap, "epCap")) {
+                        ForEach([5, 10, 25, 50, 0], id: \.self) { Text($0 > 0 ? "Newest \($0)" : "All of them").tag($0) }
+                    }
+                    Picker("Order in a show", selection: prefBinding(library.epSort, "epSort")) {
+                        Text("Newest first").tag("new")
+                        Text("Oldest first").tag("old")
+                    }
+                } header: {
+                    Text("Episode lists")
+                } footer: {
+                    Text("Shared with the web app. Lists keep each show's newest episodes, plus older ones you're partway through or chose to hear again. Nothing is deleted or marked played. Shows without their own Downloads to keep number use this limit for downloads too.")
+                }
+                .listRowBackground(Theme.surface)
+                .disabled(!dropbox.signedIn || library.busy)
+
+                Section {
                     Toggle("Download new Favorites episodes", isOn: $downloads.autoFavorites)
                     Toggle("Delete after listening", isOn: $downloads.deleteAfter)
                     LabeledContent("Space used", value: ByteCountFormatter.string(fromByteCount: downloads.bytesUsed, countStyle: .file))
@@ -1347,7 +1401,7 @@ struct SettingsView: View {
                 .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "0.9.2")
+                    LabeledContent("Version", value: "1.0")
                 }
                 .listRowBackground(Theme.surface)
             }

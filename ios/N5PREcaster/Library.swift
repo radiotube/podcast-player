@@ -43,7 +43,11 @@ final class Library: ObservableObject {
     @Published var trim = false
     @Published var trimMin: Double = 1
     /// The web app's Past episodes per show (0 means all).
-    var epCap = 0
+    /// The web app's "Past episodes per show" (0 = all) and episode order ("new" or "old").
+    @Published var epCap = 0
+    @Published var epSort = "new"
+    /// The episode in the player, which lists always keep.
+    var playingGuid = ""
     private var piKey = ""
     private var piSecret = ""
     private var lastRefresh = Date.distantPast
@@ -158,6 +162,7 @@ final class Library: ObservableObject {
         if let m = J.num(prefs["trimMin"]), m > 0 { trimMin = m }
         catOrder = ((prefs["catOrder"] as? [Any]) ?? []).map { J.str($0) }
         epCap = Int(J.num(prefs["epCap"]) ?? 0)
+        epSort = J.str(prefs["epSort"]) == "old" ? "old" : "new"
         let pi = (root["pi"] as? [String: Any]) ?? [:]
         piKey = J.str(pi["key"])
         piSecret = J.str(pi["secret"])
@@ -191,10 +196,34 @@ final class Library: ObservableObject {
     // MARK: Episodes
 
     /// Every unplayed episode from a subject's shows, newest first, once their lists have loaded.
+    /// A show's newest episodes up to the Past episodes per show limit, like the web app. Older ones stay
+    /// when they're in the player, partway through, or marked not played (Hear again). Nothing is deleted.
+    func capped(_ eps: [Episode]) -> [Episode] {
+        guard epCap > 0, eps.count > epCap else { return eps }
+        let top = Set(eps.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }.prefix(epCap).map(\.guid))
+        return eps.filter { top.contains($0.guid) || keepAnyway($0.guid) }
+    }
+
+    func keepAnyway(_ guid: String) -> Bool {
+        if guid == playingGuid { return true }
+        if isPlayed(guid) { return false }
+        let l = localPlayed[guid] ?? 0, r = remotePlayed[guid] ?? 0
+        return position(guid) > 5 || (abs(l) >= abs(r) ? l : r) < 0
+    }
+
+    /// Episodes in the chosen order.
+    func sorted(_ eps: [Episode]) -> [Episode] {
+        let old = epSort == "old"
+        return eps.sorted { a, b in
+            let x = a.date ?? .distantPast, y = b.date ?? .distantPast
+            return old ? x < y : x > y
+        }
+    }
+
     func unplayed(in subject: String) -> [SubjectItem] {
         var out: [SubjectItem] = []
         for show in showsIn(subject) {
-            for ep in episodes[show.id] ?? [] where !isPlayed(ep.guid) { out.append(SubjectItem(episode: ep, show: show)) }
+            for ep in capped(episodes[show.id] ?? []) where !isPlayed(ep.guid) { out.append(SubjectItem(episode: ep, show: show)) }
         }
         out.sort { ($0.episode.date ?? .distantPast) > ($1.episode.date ?? .distantPast) }
         return Array(out.prefix(150))
@@ -599,6 +628,7 @@ final class Library: ObservableObject {
 
     /// Notes that this iPhone started playing an episode, for the web app to pick up.
     func notePlaying(_ ep: Episode, showTitle: String, art: String) {
+        playingGuid = ep.guid
         localNowT = Library.nowMsD
         UserDefaults.standard.set(localNowT, forKey: "nowT")
         var d: [String: Any] = ["g": ep.guid, "s": ep.showId, "t": ep.title, "u": ep.audioUrl,
