@@ -1,6 +1,6 @@
 # Podcast Player
 
-A podcast player web app for iPhone and iPad that installs to the Home Screen from Safari.
+A podcast player app for iPhone and iPad that installs to the Home Screen from Safari.
 
 - Plays audio and video podcasts, with Picture in Picture for video
 - Favorites in the order you set (drag or arrows), plus subjects you name yourself; a show can sit under several subjects, and a subject lists only shows with something left to hear
