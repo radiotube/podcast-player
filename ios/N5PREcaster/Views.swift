@@ -733,6 +733,7 @@ struct EpisodeRow: View {
     @EnvironmentObject var downloads: Downloads
     @EnvironmentObject var transcripts: Transcripts
     @State private var open = false
+    @State private var showTranscript = false
 
     var body: some View {
         let played = library.isPlayed(ep.guid)
@@ -787,6 +788,30 @@ struct EpisodeRow: View {
                     .background(Capsule().fill(Theme.surface2))
                     .buttonStyle(.plain)
             }
+            if subject == nil {
+                // Bright when the episode has a transcript, dim when not. Tapping plays it with the transcript open.
+                let has = transcripts.has(ep)
+                Button {
+                    if !current { player.play(ep, show: show) }
+                    showTranscript = true
+                } label: {
+                    Image(systemName: "text.quote")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(has ? Theme.accentInk : Theme.muted)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(has ? Theme.accent : Theme.surface2))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(has ? "Play with transcript" : "Transcript, none yet")
+                .sheet(isPresented: $showTranscript) {
+                    TranscriptView()
+                        .environmentObject(player)
+                        .environmentObject(downloads)
+                        .environmentObject(transcripts)
+                        .preferredColorScheme(.dark)
+                        .tint(Theme.accent)
+                }
+            }
             DownloadButton(ep: ep)
             Button {
                 if current { player.toggle() } else { player.play(ep, show: show, subject: subject) }
@@ -826,7 +851,7 @@ struct EpisodeRow: View {
             parts.append("Making transcript")
         } else if transcripts.coming(ep) {
             parts.append("Transcript coming")
-        } else if transcripts.has(ep) {
+        } else if transcripts.has(ep) && subject != nil {
             parts.append("Transcript")
         }
         if current { parts.append(player.isPlaying ? "Playing" : "Paused") }
@@ -1490,7 +1515,7 @@ struct SettingsView: View {
                 .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "1.1")
+                    LabeledContent("Version", value: "1.1.1")
                 }
                 .listRowBackground(Theme.surface)
             }
