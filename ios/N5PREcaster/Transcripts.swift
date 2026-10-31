@@ -54,6 +54,8 @@ final class Transcripts: ObservableObject {
     }
     @Published private(set) var working: String?
     @Published private(set) var failed: [String: String] = [:]
+    /// Why a show's own transcript couldn't be loaded, by episode.
+    @Published private(set) var feedFailed: [String: String] = [:]
     @Published private(set) var current: TranscriptFile?
     @Published private(set) var currentGuid = ""
     @Published private(set) var loadingCurrent = false
@@ -115,18 +117,56 @@ final class Transcripts: ObservableObject {
 
     /// The transcript the show publishes in its feed (SRT, VTT or Podcasting 2.0 JSON), kept on the iPhone.
     private func published(_ ep: Episode, key k: String) async -> TranscriptFile? {
-        guard let s = ep.transcript, let url = URL(string: s) else { return nil }
-        if let at = checked["feed." + k], Date().timeIntervalSince(at) < 600 { return nil }
+        // An episode picked up from another device, or saved before the feed was read, carries no
+        // transcript link, so look it up in the show's episode list.
+        let link = (ep.transcript ?? "").isEmpty ? publishedLink(ep) : ep.transcript!
+        guard !link.isEmpty, var url = URL(string: link) else { return nil }
+        if url.scheme == "http", var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            parts.scheme = "https"
+            url = parts.url ?? url
+        }
+        if let at = checked["feed." + k], Date().timeIntervalSince(at) < 120 { return nil }
         checked["feed." + k] = Date()
-        guard let got = try? await URLSession.shared.data(from: url),
-              (got.1 as? HTTPURLResponse)?.statusCode ?? 200 < 400,
-              let text = String(data: got.0, encoding: .utf8) ?? String(data: got.0, encoding: .isoLatin1) else { return nil }
+        let got: (Data, URLResponse)
+        do { got = try await URLSession.shared.data(from: url) } catch {
+            feedFailed[ep.guid] = error.localizedDescription
+            return nil
+        }
+        let code = (got.1 as? HTTPURLResponse)?.statusCode ?? 200
+        guard code < 400 else {
+            feedFailed[ep.guid] = "the show's server answered \(code)"
+            return nil
+        }
+        let text = String(data: got.0, encoding: .utf8) ?? String(data: got.0, encoding: .isoLatin1) ?? ""
         let segs = Transcripts.parse(text)
-        guard !segs.isEmpty else { return nil }
+        guard !segs.isEmpty else {
+            feedFailed[ep.guid] = "the file had no timed lines this app can read"
+            return nil
+        }
+        feedFailed[ep.guid] = nil
         let f = TranscriptFile(v: 1, g: ep.guid, sid: ep.showId, t: ep.title, show: nil, made: nil, by: nil,
                                dur: ep.duration > 0 ? ep.duration : nil, segs: segs, src: "feed", size: nil)
         if let out = try? JSONEncoder().encode(f) { saveLocal(k, out) }
         return f
+    }
+
+    /// The transcript link from the show's own episode list (any show, if the show isn't known).
+    private func publishedLink(_ ep: Episode) -> String {
+        if let found = library.episodes[ep.showId]?.first(where: { $0.guid == ep.guid }) {
+            return found.transcript ?? ""
+        }
+        for list in library.episodes.values {
+            if let found = list.first(where: { $0.guid == ep.guid || $0.audioUrl == ep.audioUrl }) { return found.transcript ?? "" }
+        }
+        return ""
+    }
+
+    /// Lets the transcript screen try the show's own transcript again right away.
+    func retryPublished(_ ep: Episode) async {
+        let k = Transcripts.key(sid: ep.showId, guid: ep.guid)
+        checked["feed." + k] = nil
+        currentGuid = ""
+        await loadCurrent(ep)
     }
 
     /// Reads SRT, VTT or JSON captions and joins short cues into sentence-sized lines, like the web app.

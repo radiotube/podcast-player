@@ -1100,11 +1100,18 @@ struct TranscriptView: View {
                 ProgressView()
             } else if transcripts.isQueued(ep.guid) {
                 Text("Waiting for another transcript to finish first.")
+            } else if let why = transcripts.feedFailed[ep.guid] {
+                Text("Couldn't load the show's own transcript: \(why).")
+                Button("Try again") { Task { await transcripts.retryPublished(ep) } }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.accentInk)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(Theme.accent))
+                    .buttonStyle(.plain)
             } else if downloads.isDownloaded(ep.guid) {
                 if let err = transcripts.failed[ep.guid] {
                     Text("Couldn't make one: \(err)")
-                } else if !(ep.transcript ?? "").isEmpty {
-                    Text("This show publishes its own transcript, which the web app shows. You can still make one here.")
                 } else {
                     Text("No transcript yet.")
                 }
@@ -1340,7 +1347,7 @@ struct SettingsView: View {
                 .disabled(!dropbox.signedIn || library.busy)
 
                 Section {
-                    LabeledContent("Version", value: "0.9.1")
+                    LabeledContent("Version", value: "0.9.2")
                 }
                 .listRowBackground(Theme.surface)
             }
